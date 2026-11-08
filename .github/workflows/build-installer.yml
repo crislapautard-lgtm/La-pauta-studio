@@ -1,0 +1,25 @@
+name: Build Installer La Pauta Studio
+on:
+  push:
+    branches: [ main ]
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build EXE
+        run: cmake --build build --config Release
+      - name: Convert icon PNG to ICO
+        run: |
+          powershell -Command "Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile('Assets/icon.png'); $ico = [System.IO.File]::Create('Assets/icon.ico'); $img.Save($ico, [System.Drawing.Imaging.ImageFormat]::Icon); $ico.Close()"
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+      - name: Build Installer
+        run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
+      - name: Upload Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: La-Pauta-Studio-Installer
+          path: installer/*.exe
