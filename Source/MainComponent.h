@@ -1,48 +1,45 @@
 #pragma once
 #include <JuceHeader.h>
 
-class MainComponent : public juce::AudioAppComponent,
-                      public juce::Button::Listener,
-                      public juce::Slider::Listener,
-                      public juce::Timer
+class MainComponent : public juce::AudioAppComponent
 {
 public:
     MainComponent();
     ~MainComponent() override;
+
+    void paint(juce::Graphics& g) override;
+    void resized() override;
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override;
     void releaseResources() override;
-    void paint(juce::Graphics& g) override;
-    void resized() override;
-    void buttonClicked(juce::Button* button) override;
-    void sliderValueChanged(juce::Slider* slider) override;
-    void timerCallback() override;
 
 private:
-    juce::TextButton playButton{"PLAY"};
-    juce::TextButton stopButton{"STOP"};
-    juce::TextButton recButton{"REC"};
-    juce::TextButton addTrackButton{"+ ADD TRACK"};
-    juce::TextButton scanButton{"ESCANEAR VST3"};
-    juce::TextButton beatButton{"BEAT MAKER"};
-    juce::TextButton renderButton{"RENDER WAV"};
+    void play();
+    void stop();
+    void toggleRec();
+    void renderWav();
+    void scanVST3Real();
+    void openBeatMaker();
+    void addTrack();
+    void openFxList();
 
-    juce::Label titleLabel;
-    juce::Label bpmLabel;
-    juce::Slider bpmSlider;
-    juce::Slider masterSlider;
-    juce::Slider track1Volume;
-    juce::Slider track2Volume;
+    // UI
+    juce::Label titleLabel, bpmLabel, masterLabel;
+    juce::TextButton playButton, stopButton, recButton, renderButton;
+    juce::TextButton scanButton, beatButton, addTrackButton, fxButton;
+    juce::Slider bpmSlider, masterSlider;
 
-    juce::ToggleButton mute1{"M"}, solo1{"S"}, rec1{"R"};
-    juce::ToggleButton mute2{"M"}, solo2{"S"}, rec2{"R"};
-
+    // Estado
+    int bpm = 95;
     bool isPlaying = false;
     bool isRecording = false;
-    double currentPosition = 0.0;
-    double sampleRateNow = 44100.0;
-    juce::AudioBuffer<float> recordedBuffer;
-    int recordedSamples = 0;
+    double sampleRate = 44100.0;
+    int playhead = 0;
+
+    // --- ESTO ES LO QUE ESCANEA TUS VST DE VERDAD ---
+    juce::AudioPluginFormatManager formatManager;
+    juce::KnownPluginList knownPlugins;
+    juce::StringArray foundPluginNames;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
