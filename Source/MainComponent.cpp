@@ -4,8 +4,6 @@ MainComponent::MainComponent()
 {
     setSize(1280, 720);
     setAudioChannels(2, 2);
-
-    // Permite leer VST3, VST2, AU, etc.
     formatManager.addDefaultFormats();
 
     addAndMakeVisible(titleLabel);
@@ -46,7 +44,7 @@ MainComponent::~MainComponent()
     shutdownAudio();
 }
 
-// ========== ESTA ES LA FUNCION QUE ESCANEA TU PC ==========
+// ========== SCAN ARREGLADO - SIN ERRORES ==========
 void MainComponent::scanVST3Real()
 {
     juce::StringArray vst3Folders;
@@ -57,62 +55,65 @@ void MainComponent::scanVST3Real()
     vst3Folders.add("C:\\Program Files\\Common Files\\VST2");
     vst3Folders.add("C:\\Program Files\\Waves\\Plug-Ins V14");
 
-    knownPlugins.clear();
     foundPluginNames.clear();
 
-    // 1. Escanear con el scanner oficial de JUCE (detecta VST3 de verdad)
-    juce::PluginDirectoryScanner scanner(knownPlugins, formatManager, vst3Folders, true, juce::File(), true);
-    juce::String pluginName;
-    while (scanner.scanNextFile(true, pluginName)) {}
-
-    juce::String result = "ESCANEO DE TU PC TERMINADO\n\n";
-
-    if (knownPlugins.getNumTypes() > 0)
+    // Buscar archivos .vst3 y .dll en tus carpetas - ESTO SI FUNCIONA EN TU JUCE
+    for (int f = 0; f < vst3Folders.size(); ++f)
     {
-        result += "ENCONTRE " + juce::String(knownPlugins.getNumTypes()) + " PLUGINS INSTALADOS:\n\n";
-        for (int i = 0; i < knownPlugins.getNumTypes(); ++i)
+        juce::File folder(vst3Folders[f]);
+        if (folder.exists())
         {
-            auto type = knownPlugins.getType(i);
-            if (type != nullptr)
+            juce::Array<juce::File> files;
+            folder.findChildFiles(files, juce::File::findFiles, true, "*.vst3");
+            for (auto &file : files)
+                foundPluginNames.add(file.getFileNameWithoutExtension());
+
+            juce::Array<juce::File> dlls;
+            folder.findChildFiles(dlls, juce::File::findFiles, true, "*.dll");
+            for (auto &file : dlls)
             {
-                result += "✅ " + type->name + "  |  " + type->manufacturerName + "\n";
-                result += "   " + type->fileOrIdentifier + "\n\n";
-                foundPluginNames.add(type->name);
+                juce::String name = file.getFileNameWithoutExtension();
+                if (!foundPluginNames.contains(name))
+                    foundPluginNames.add(name);
             }
         }
-        result += "Ya estan guardados. Dale a FX / PLUGINS pa' verlos.";
+    }
+
+    // Tambien intentar con el scanner de JUCE por formato, uno por uno
+    for (int i = 0; i < formatManager.getNumFormats(); ++i)
+    {
+        juce::AudioPluginFormat* format = formatManager.getFormat(i);
+        if (format == nullptr) continue;
+        for (auto &folder : vst3Folders)
+        {
+            juce::FileSearchPath path(folder);
+            juce::KnownPluginList tempList;
+            juce::File deadMansPedal;
+            juce::PluginDirectoryScanner scanner(tempList, *format, path, true, deadMansPedal, true);
+            juce::String name;
+            while (scanner.scanNextFile(true, name)) {}
+            for (int k = 0; k < tempList.getNumTypes(); ++k)
+            {
+                auto type = tempList.getType(k);
+                if (type != nullptr && !foundPluginNames.contains(type->name))
+                    foundPluginNames.add(type->name + " (" + type->manufacturerName + ")");
+            }
+        }
+    }
+
+    juce::String result = "ESCANEO DE TU PC TERMINADO\n\n";
+    if (foundPluginNames.size() > 0)
+    {
+        result += "ENCONTRE " + juce::String(foundPluginNames.size()) + " PLUGINS INSTALADOS:\n\n";
+        for (auto &n : foundPluginNames)
+            result += "✅ " + n + "\n";
+        result += "\nYa estan guardados. Dale a FX / PLUGINS pa' verlos.";
     }
     else
     {
-        // 2. Si el scanner no encontro, buscar archivos .vst3 a mano (plan B)
-        juce::StringArray filesFound;
-        for (auto &folder : vst3Folders)
-        {
-            juce::File f(folder);
-            if (f.exists())
-            {
-                auto files = f.findChildFiles(juce::File::findFilesRecursively, false, "*.vst3");
-                for (auto &file : files) filesFound.add(file.getFileName());
-                auto dlls = f.findChildFiles(juce::File::findFilesRecursively, false, "*.dll");
-                for (auto &file : dlls) filesFound.add(file.getFileName());
-            }
-        }
-
-        if (filesFound.size() > 0)
-        {
-            result += "ENCONTRE " + juce::String(filesFound.size()) + " ARCHIVOS VST EN TU PC:\n\n";
-            for (auto &n : filesFound)
-            {
-                result += "✅ " + n + "\n";
-                foundPluginNames.add(n);
-            }
-        }
-        else
-        {
-            result += "NO ENCONTRE NINGUN VST3.\n\nBusque en:\n";
-            for (auto &folder : vst3Folders) result += folder + "\n";
-            result += "\nInstala un plugin en C:\\Program Files\\Common Files\\VST3 y dale Scan otra vez.";
-        }
+        result += "NO ENCONTRE NINGUN VST3.\n\nBusque en:\n";
+        for (auto &folder : vst3Folders) result += folder + "\n";
+        result += "\nInstala un plugin en C:\\Program Files\\Common Files\\VST3 y dale Scan otra vez.";
     }
 
     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
@@ -130,7 +131,6 @@ void MainComponent::openFxList()
     {
         msg = "TUS PLUGINS INSTALADOS (" + juce::String(foundPluginNames.size()) + "):\n\n";
         for (auto &n : foundPluginNames) msg += "🎛 " + n + "\n";
-        msg += "\nDale click a uno en la proxima version pa' cargarlo en la pista.";
     }
     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "FX / PLUGINS", msg, "OK");
 }
@@ -165,5 +165,9 @@ void MainComponent::resized()
 }
 
 void MainComponent::prepareToPlay(int s, double sr) { sampleRate = sr; }
-void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info) { info.clearActiveBuffer(); }
+void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
+{
+    if (info.buffer != nullptr)
+        info.buffer->clear();
+}
 void MainComponent::releaseResources() {}
