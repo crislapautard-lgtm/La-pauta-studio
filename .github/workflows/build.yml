@@ -1,22 +1,18 @@
-name: Build La Pauta Studio
-
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-
+name: Build
+on: [push]
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Configure
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build --config Release
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: La-Pauta-Studio-Windows
-          path: build/**/La-Pauta-Studio.exe
+          name: La-Pauta-Studio
+          path: |
+            build/**/*.exe
+            build/La-Pauta-Studio_artefacts/Release/*.exe
