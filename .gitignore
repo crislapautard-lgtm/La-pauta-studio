@@ -1,0 +1,14 @@
+Builds/
+build/
+*.exe
+*.dll
+*.lib
+*.pdb
+*.o
+*.obj
+.vs/
+.idea/
+DerivedData/
+*.user
+*.suo
+JuceLibraryCode/
