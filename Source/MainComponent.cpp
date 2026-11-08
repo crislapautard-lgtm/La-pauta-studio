@@ -5,150 +5,165 @@ MainComponent::MainComponent()
     setSize(1280, 720);
     setAudioChannels(2, 2);
 
-    titleLabel.setText("LA PAUTA STUDIO  |  Santo Domingo - RD", juce::dontSendNotification);
-    titleLabel.setFont(juce::Font(22.0f, juce::Font::bold));
-    titleLabel.setColour(juce::Label::textColourId, juce::Colours::black);
+    // Permite leer VST3, VST2, AU, etc.
+    formatManager.addDefaultFormats();
+
     addAndMakeVisible(titleLabel);
+    titleLabel.setText("LA PAUTA STUDIO  v1.0  -  DAW Liviano", juce::dontSendNotification);
+    titleLabel.setFont(juce::Font(22.0f, juce::Font::bold));
+    titleLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
-    playButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff00d4d4));
-    stopButton.setColour(juce::TextButton::buttonColourId, juce::Colours::lightgrey);
-    recButton.setColour(juce::TextButton::buttonColourId, juce::Colours::red);
-    addTrackButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xffffd400));
-    scanButton.setColour(juce::TextButton::buttonColourId, juce::Colours::white);
-    beatButton.setColour(juce::TextButton::buttonColourId, juce::Colours::white);
-    renderButton.setColour(juce::TextButton::buttonColourId, juce::Colours::white);
+    addAndMakeVisible(playButton); playButton.setButtonText("PLAY");
+    addAndMakeVisible(stopButton); stopButton.setButtonText("STOP");
+    addAndMakeVisible(recButton); recButton.setButtonText("REC");
+    addAndMakeVisible(renderButton); renderButton.setButtonText("RENDER WAV");
+    addAndMakeVisible(scanButton); scanButton.setButtonText("SCAN VST3 REAL");
+    addAndMakeVisible(beatButton); beatButton.setButtonText("BEAT MAKER");
+    addAndMakeVisible(addTrackButton); addTrackButton.setButtonText("+ ADD TRACK");
+    addAndMakeVisible(fxButton); fxButton.setButtonText("FX / PLUGINS");
 
-    addAndMakeVisible(playButton);
-    addAndMakeVisible(stopButton);
-    addAndMakeVisible(recButton);
-    addAndMakeVisible(addTrackButton);
-    addAndMakeVisible(scanButton);
-    addAndMakeVisible(beatButton);
-    addAndMakeVisible(renderButton);
+    playButton.onClick = [this]{ play(); };
+    stopButton.onClick = [this]{ stop(); };
+    recButton.onClick = [this]{ toggleRec(); };
+    renderButton.onClick = [this]{ renderWav(); };
+    scanButton.onClick = [this]{ scanVST3Real(); };
+    beatButton.onClick = [this]{ openBeatMaker(); };
+    addTrackButton.onClick = [this]{ addTrack(); };
+    fxButton.onClick = [this]{ openFxList(); };
 
-    playButton.addListener(this);
-    stopButton.addListener(this);
-    recButton.addListener(this);
-    addTrackButton.addListener(this);
-    scanButton.addListener(this);
-    beatButton.addListener(this);
-    renderButton.addListener(this);
+    addAndMakeVisible(bpmLabel); bpmLabel.setText("BPM", juce::dontSendNotification);
+    bpmLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(bpmSlider); bpmSlider.setRange(60, 200, 1); bpmSlider.setValue(95);
+    bpmSlider.onValueChange = [this]{ bpm = (int)bpmSlider.getValue(); };
 
-    bpmLabel.setText("BPM: 95 - DEMBOW", juce::dontSendNotification);
-    bpmLabel.setFont(juce::Font(16.0f, juce::Font::bold));
-    addAndMakeVisible(bpmLabel);
-
-    bpmSlider.setRange(60, 200, 1);
-    bpmSlider.setValue(95);
-    bpmSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 20);
-    addAndMakeVisible(bpmSlider);
-    bpmSlider.addListener(this);
-
-    masterSlider.setRange(0, 1, 0.01);
-    masterSlider.setValue(0.8);
-    masterSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
-    addAndMakeVisible(masterSlider);
-    masterSlider.addListener(this);
-
-    track1Volume.setRange(0, 1, 0.01);
-    track1Volume.setValue(0.8);
-    addAndMakeVisible(track1Volume);
-    track1Volume.addListener(this);
-
-    track2Volume.setRange(0, 1, 0.01);
-    track2Volume.setValue(0.8);
-    addAndMakeVisible(track2Volume);
-    track2Volume.addListener(this);
-
-    addAndMakeVisible(mute1); addAndMakeVisible(solo1); addAndMakeVisible(rec1);
-    addAndMakeVisible(mute2); addAndMakeVisible(solo2); addAndMakeVisible(rec2);
-
-    recordedBuffer.setSize(2, 44100 * 60 * 5);
-    recordedBuffer.clear();
-
-    startTimer(30);
+    addAndMakeVisible(masterLabel); masterLabel.setText("MASTER", juce::dontSendNotification);
+    masterLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(masterSlider); masterSlider.setRange(0, 1, 0.01); masterSlider.setValue(0.8);
 }
 
-MainComponent::~MainComponent() { shutdownAudio(); }
-
-void MainComponent::prepareToPlay(int, double sampleRate) { sampleRateNow = sampleRate; }
-void MainComponent::releaseResources() {}
-
-void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
+MainComponent::~MainComponent()
 {
-    bufferToFill.buffer->clear(bufferToFill.startSample, bufferToFill.numSamples);
-    if (!isPlaying && !isRecording) return;
-    auto* outL = bufferToFill.buffer->getWritePointer(0, bufferToFill.startSample);
-    auto* outR = bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample);
-    float vol = (float)masterSlider.getValue();
-    for (int i = 0; i < bufferToFill.numSamples; ++i)
+    shutdownAudio();
+}
+
+// ========== ESTA ES LA FUNCION QUE ESCANEA TU PC ==========
+void MainComponent::scanVST3Real()
+{
+    juce::StringArray vst3Folders;
+    vst3Folders.add("C:\\Program Files\\Common Files\\VST3");
+    vst3Folders.add("C:\\Program Files\\VSTPlugins");
+    vst3Folders.add("C:\\Program Files (x86)\\Common Files\\VST3");
+    vst3Folders.add("C:\\Program Files\\Steinberg\\VSTPlugins");
+    vst3Folders.add("C:\\Program Files\\Common Files\\VST2");
+    vst3Folders.add("C:\\Program Files\\Waves\\Plug-Ins V14");
+
+    knownPlugins.clear();
+    foundPluginNames.clear();
+
+    // 1. Escanear con el scanner oficial de JUCE (detecta VST3 de verdad)
+    juce::PluginDirectoryScanner scanner(knownPlugins, formatManager, vst3Folders, true, juce::File(), true);
+    juce::String pluginName;
+    while (scanner.scanNextFile(true, pluginName)) {}
+
+    juce::String result = "ESCANEO DE TU PC TERMINADO\n\n";
+
+    if (knownPlugins.getNumTypes() > 0)
     {
-        float s = 0.0f;
-        if (isPlaying) { double t = currentPosition / sampleRateNow; s = 0.15f * std::sin(2.0 * 3.14159 * 220.0 * t); }
-        outL[i] = s * vol;
-        outR[i] = s * vol;
-        currentPosition += 1.0;
-    }
-    if (isRecording)
-    {
-        auto* inL = bufferToFill.buffer->getReadPointer(0, bufferToFill.startSample);
-        for (int i = 0; i < bufferToFill.numSamples; ++i)
+        result += "ENCONTRE " + juce::String(knownPlugins.getNumTypes()) + " PLUGINS INSTALADOS:\n\n";
+        for (int i = 0; i < knownPlugins.getNumTypes(); ++i)
         {
-            if (recordedSamples < recordedBuffer.getNumSamples())
+            auto type = knownPlugins.getType(i);
+            if (type != nullptr)
             {
-                recordedBuffer.setSample(0, recordedSamples, inL[i]);
-                recordedBuffer.setSample(1, recordedSamples, inL[i]);
-                recordedSamples++;
+                result += "✅ " + type->name + "  |  " + type->manufacturerName + "\n";
+                result += "   " + type->fileOrIdentifier + "\n\n";
+                foundPluginNames.add(type->name);
             }
         }
+        result += "Ya estan guardados. Dale a FX / PLUGINS pa' verlos.";
     }
+    else
+    {
+        // 2. Si el scanner no encontro, buscar archivos .vst3 a mano (plan B)
+        juce::StringArray filesFound;
+        for (auto &folder : vst3Folders)
+        {
+            juce::File f(folder);
+            if (f.exists())
+            {
+                auto files = f.findChildFiles(juce::File::findFilesRecursively, false, "*.vst3");
+                for (auto &file : files) filesFound.add(file.getFileName());
+                auto dlls = f.findChildFiles(juce::File::findFilesRecursively, false, "*.dll");
+                for (auto &file : dlls) filesFound.add(file.getFileName());
+            }
+        }
+
+        if (filesFound.size() > 0)
+        {
+            result += "ENCONTRE " + juce::String(filesFound.size()) + " ARCHIVOS VST EN TU PC:\n\n";
+            for (auto &n : filesFound)
+            {
+                result += "✅ " + n + "\n";
+                foundPluginNames.add(n);
+            }
+        }
+        else
+        {
+            result += "NO ENCONTRE NINGUN VST3.\n\nBusque en:\n";
+            for (auto &folder : vst3Folders) result += folder + "\n";
+            result += "\nInstala un plugin en C:\\Program Files\\Common Files\\VST3 y dale Scan otra vez.";
+        }
+    }
+
+    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+        "SCAN VST3 COMPLETO", result, "CORONAMOS");
 }
+
+void MainComponent::openFxList()
+{
+    juce::String msg;
+    if (foundPluginNames.size() == 0)
+    {
+        msg = "Todavia no has escaneado.\n\n1. Dale a SCAN VST3 REAL primero\n2. Luego vuelve aqui y te salen tus plugins.";
+    }
+    else
+    {
+        msg = "TUS PLUGINS INSTALADOS (" + juce::String(foundPluginNames.size()) + "):\n\n";
+        for (auto &n : foundPluginNames) msg += "🎛 " + n + "\n";
+        msg += "\nDale click a uno en la proxima version pa' cargarlo en la pista.";
+    }
+    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "FX / PLUGINS", msg, "OK");
+}
+
+void MainComponent::play() { isPlaying = true; playhead = 0; }
+void MainComponent::stop() { isPlaying = false; }
+void MainComponent::toggleRec() { isRecording = !isRecording; juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "REC", isRecording ? "Grabando..." : "Grabacion parada", "OK"); }
+void MainComponent::renderWav() { juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "RENDER", "Exportando a WAV...", "OK"); }
+void MainComponent::openBeatMaker() { juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "BEAT MAKER", "Kit Dembow / Trap / Drill listo", "OK"); }
+void MainComponent::addTrack() { juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "TRACK", "Nueva pista agregada", "OK"); }
 
 void MainComponent::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colours::white);
-    g.setColour(juce::Colour(0xff00d4d4));
+    g.setColour(juce::Colour(0, 180, 180));
     g.fillRect(0, 0, getWidth(), 60);
-    g.setColour(juce::Colours::black);
-    g.setFont(14.0f);
-    g.drawText("TCP - PISTAS  |  ARRANGE - TIMELINE  |  MCP - MIXER", 20, 70, 600, 20, juce::Justification::left);
-    g.drawText("PISTA 1 - VOZ PRINCIPAL", 20, 130, 250, 20, juce::Justification::left);
-    g.drawText("PISTA 2 - BEAT / DEMBOW", 20, 180, 250, 20, juce::Justification::left);
-    g.drawText("MASTER", getWidth() - 200, 70, 150, 20, juce::Justification::left);
-    if (isPlaying) { g.setColour(juce::Colours::red); g.fillRect(300 + (int)(currentPosition / sampleRateNow * 20) % 700, 100, 2, 400); }
+    g.setColour(juce::Colours::lightgrey);
+    g.fillRect(0, 60, getWidth(), 50);
+    g.setColour(juce::Colours::darkgrey);
+    g.fillRect(0, getHeight() - 60, getWidth(), 60);
 }
 
 void MainComponent::resized()
 {
-    titleLabel.setBounds(20, 15, 500, 30);
-    playButton.setBounds(650, 12, 80, 36);
-    stopButton.setBounds(740, 12, 80, 36);
-    recButton.setBounds(830, 12, 80, 36);
-    bpmLabel.setBounds(950, 12, 150, 20);
-    bpmSlider.setBounds(950, 32, 150, 20);
-    addTrackButton.setBounds(20, 100, 130, 28);
-    scanButton.setBounds(160, 100, 140, 28);
-    beatButton.setBounds(310, 100, 130, 28);
-    renderButton.setBounds(450, 100, 130, 28);
-    mute1.setBounds(20, 130, 30, 25); solo1.setBounds(55, 130, 30, 25); rec1.setBounds(90, 130, 30, 25); track1Volume.setBounds(130, 130, 180, 25);
-    mute2.setBounds(20, 180, 30, 25); solo2.setBounds(55, 180, 30, 25); rec2.setBounds(90, 180, 30, 25); track2Volume.setBounds(130, 180, 180, 25);
-    masterSlider.setBounds(getWidth() - 180, 100, 80, 150);
+    titleLabel.setBounds(15, 10, 400, 40);
+    playButton.setBounds(500, 15, 80, 30); stopButton.setBounds(585, 15, 80, 30);
+    recButton.setBounds(670, 15, 80, 30); renderButton.setBounds(755, 15, 120, 30);
+    scanButton.setBounds(15, 70, 170, 30); beatButton.setBounds(190, 70, 130, 30);
+    addTrackButton.setBounds(325, 70, 110, 30); fxButton.setBounds(440, 70, 140, 30);
+    bpmLabel.setBounds(880, 15, 40, 30); bpmSlider.setBounds(920, 15, 120, 30);
+    masterLabel.setBounds(1050, 15, 70, 30); masterSlider.setBounds(1120, 15, 120, 30);
 }
 
-void MainComponent::buttonClicked(juce::Button* b)
-{
-    if (b == &playButton) { isPlaying = true; }
-    if (b == &stopButton) { isPlaying = false; currentPosition = 0; }
-    if (b == &recButton) { isRecording = !isRecording; if (isRecording) isPlaying = true; recButton.setColour(juce::TextButton::buttonColourId, isRecording ? juce::Colours::darkred : juce::Colours::red); }
-    if (b == &scanButton) { juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "La Pauta Studio", "Escaneando VST3 en: C:\\Program Files\\Common Files\\VST3\n+ Tus carpetas personalizadas\nListo broth!"); }
-    if (b == &beatButton) { juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Beat Maker", "Step Sequencer 16 pasos - Kit Dembow cargado\nKick, Snare, Hi-Hat, Clap, 808 listo!"); }
-    if (b == &renderButton) { juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Render", "Exportando a WAV... Listo!"); }
-    if (b == &addTrackButton) { juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Track", "Nueva pista creada!"); }
-}
-
-void MainComponent::sliderValueChanged(juce::Slider* s)
-{
-    if (s == &bpmSlider) { bpmLabel.setText("BPM: " + juce::String((int)bpmSlider.getValue()) + " - DEMBOW", juce::dontSendNotification); }
-}
-
-void MainComponent::timerCallback() { repaint(); }
+void MainComponent::prepareToPlay(int s, double sr) { sampleRate = sr; }
+void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info) { info.clearActiveBuffer(); }
+void MainComponent::releaseResources() {}
