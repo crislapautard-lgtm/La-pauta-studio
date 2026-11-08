@@ -76,7 +76,7 @@ void MainComponent::releaseResources() {}
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
 {
-    bufferToFill.clearActiveBuffer();
+    bufferToFill.buffer->clear(bufferToFill.startSample, bufferToFill.numSamples);
     if (!isPlaying && !isRecording) return;
     auto* outL = bufferToFill.buffer->getWritePointer(0, bufferToFill.startSample);
     auto* outR = bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample);
