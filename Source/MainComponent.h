@@ -25,7 +25,7 @@ private:
     juce::AudioFormatManager formatManager; juce::AudioPluginFormatManager pluginManager;
     std::unique_ptr<juce::FileChooser> fileChooser; std::unique_ptr<juce::AudioFormatWriter> writer;
     std::unique_ptr<juce::AudioPluginInstance> pluginInstance; std::unique_ptr<juce::AudioProcessorEditor> pluginEditor;
-    juce::Array<Track> tracks; juce::Array<MidiNote> midiNotes; juce::StringArray foundPlugins; juce::Array<juce::PluginDescription> pluginDescs;
+    juce::Array<Track> tracks; juce::Array<MidiNote> midiNotes; juce::StringArray foundPlugins; juce::Array<juce::PluginDescription> pluginDescs; juce::StringArray foundJSFX;
     int selectedTrack=0, playhead=0, bpm=95, dragStartX=0, dragTrack=-1;
     bool isPlaying=false, isRecording=false, metronomeOn=false;
     double sampleRate=44100; float eqLow=0, eqMid=0, eqHigh=0; juce::File currentSampleFile;
