@@ -30,7 +30,7 @@ public:
         }
     }
 
-    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override {
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override {
         if (muted) return;
 
         if (isPlaying && readerSource != nullptr) {
@@ -44,6 +44,14 @@ public:
         }
 
         buffer.applyGain(volume);
+    }
+
+    void processSendBlock(const juce::AudioBuffer<float>& sourceBuffer, juce::AudioBuffer<float>& auxBusBuffer) {
+        if (muted || auxSendLevel <= 0.0f) return;
+
+        for (int ch = 0; ch < juce::jmin(sourceBuffer.getNumChannels(), auxBusBuffer.getNumChannels()); ++ch) {
+            auxBusBuffer.addFrom(ch, 0, sourceBuffer, ch, 0, sourceBuffer.getNumSamples(), auxSendLevel);
+        }
     }
 
     void loadAudioFile(const juce::File& file) {
@@ -97,6 +105,9 @@ public:
     void setPan(float newPan) { pan = newPan; }
     float getPan() const { return pan; }
 
+    void setAuxSendLevel(float level) { auxSendLevel = juce::jlimit(0.0f, 1.0f, level); }
+    float getAuxSendLevel() const { return auxSendLevel; }
+
     void setMute(bool shouldMute) { muted = shouldMute; }
     bool isMuted() const { return muted; }
 
@@ -104,7 +115,7 @@ public:
     bool isSoloed() const { return soloed; }
 
     bool getIsRecording() const { return isRecordingState; }
-    void processRecording(const float* const* channelData, int numChannels, int numSamples) {}
+    void processRecording(const float* const*, int, int) {}
 
     juce::File getCurrentAudioFilePath() const { return audioFile; }
 
@@ -145,6 +156,7 @@ private:
 
     float volume = 0.8f;
     float pan = 0.0f;
+    float auxSendLevel = 0.0f;
     bool muted = false;
     bool soloed = false;
 
