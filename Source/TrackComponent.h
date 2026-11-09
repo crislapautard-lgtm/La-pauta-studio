@@ -11,7 +11,6 @@ public:
     TrackComponent(int trackId, AudioTrack* audioTrack)
         : id(trackId), targetAudioTrack(audioTrack)
     {
-        // Inicializar el gestor de formatos y el visor de ondas
         formatManager.registerBasicFormats();
         waveformDisplay = std::make_unique<WaveformDisplay>(formatManager);
         addAndMakeVisible(waveformDisplay.get());
@@ -41,6 +40,13 @@ public:
         panSlider.setTooltip("Paneo (L / R)");
         addAndMakeVisible(panSlider);
 
+        // Botón FX (Cargar Plugins VST3)
+        pluginButton.setButtonText("FX");
+        pluginButton.addListener(this);
+        pluginButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3a3a3a));
+        pluginButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff007acc));
+        addAndMakeVisible(pluginButton);
+
         // Fader de VOLUMEN
         volumeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
         volumeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 45, 20);
@@ -64,16 +70,15 @@ public:
         soloButton.removeListener(this);
         volumeSlider.removeListener(this);
         panSlider.removeListener(this);
+        pluginButton.removeListener(this);
     }
 
     void paint (juce::Graphics& g) override
     {
-        // Fondo y borde de la pista
         g.fillAll(juce::Colour(0xff2d2d2d));
         g.setColour(juce::Colours::darkgrey);
         g.drawRect(getLocalBounds(), 1);
 
-        // Nombre de la pista
         g.setColour(juce::Colours::white);
         g.drawText("Pista " + juce::String(id), 10, 22, 60, 20, juce::Justification::left);
     }
@@ -82,18 +87,18 @@ public:
     {
         int yOffset = 15;
         
-        // Distribución exacta de controles en la pista (70px de alto)
         muteButton.setBounds(75, yOffset, 30, 40);
         soloButton.setBounds(110, yOffset, 30, 40);
         panSlider.setBounds(145, yOffset, 40, 40);
+        pluginButton.setBounds(190, yOffset, 35, 40);
         
-        // La forma de onda ocupa el espacio central principal
-        waveformDisplay->setBounds(190, yOffset, getWidth() - 365, 40);
+        // Forma de onda en el centro
+        waveformDisplay->setBounds(235, yOffset, getWidth() - 410, 40);
 
-        // Fader de volumen a la derecha de la onda
+        // Fader de volumen
         volumeSlider.setBounds(getWidth() - 170, yOffset + 5, 90, 30);
         
-        // Botón REC en la esquina extrema derecha
+        // Botón REC
         recordButton.setBounds(getWidth() - 75, yOffset, 60, 40);
     }
 
@@ -114,7 +119,6 @@ public:
                 if (targetAudioTrack)
                 {
                     targetAudioTrack->stopRecording();
-                    // Al detener la grabación, cargamos automáticamente la forma de onda
                     waveformDisplay->setFile(wavFile);
                 }
             }
@@ -128,6 +132,24 @@ public:
         {
             if (targetAudioTrack)
                 targetAudioTrack->setSolo(soloButton.getToggleState());
+        }
+        else if (button == &pluginButton)
+        {
+            pluginChooser = std::make_unique<juce::FileChooser>("Selecciona un plugin VST3",
+                                                             juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+                                                             "*.vst3");
+            pluginChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                [this](const juce::FileChooser& fc) {
+                    auto file = fc.getResult();
+                    if (file != juce::File{} && targetAudioTrack) {
+                        targetAudioTrack->loadPlugin(file, [this](const juce::String& name) {
+                            juce::MessageManager::callAsync([this, name]() {
+                                pluginButton.setButtonText(name.substring(0, 4));
+                                pluginButton.setTooltip(name);
+                            });
+                        });
+                    }
+                });
         }
     }
 
@@ -152,11 +174,13 @@ private:
     juce::TextButton recordButton;
     juce::TextButton muteButton;
     juce::TextButton soloButton;
+    juce::TextButton pluginButton;
     juce::Slider panSlider;
     juce::Slider volumeSlider;
 
     juce::AudioFormatManager formatManager;
     std::unique_ptr<WaveformDisplay> waveformDisplay;
+    std::unique_ptr<juce::FileChooser> pluginChooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TrackComponent)
 };
