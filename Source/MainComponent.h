@@ -65,7 +65,6 @@ public:
 
     // Captura de atajos de teclado globales para el DAW (Ctrl+Z y Ctrl+Y)
     bool keyPressed(const juce::KeyPress& key, juce::Component* originatingComponent) override {
-        // Ctrl + Z (Deshacer)
         if (key == juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0)) {
             if (undoManager.canUndo()) {
                 undoManager.undo();
@@ -73,7 +72,6 @@ public:
                 return true;
             }
         }
-        // Ctrl + Y o Ctrl + Shift + Z (Rehacer)
         else if (key == juce::KeyPress('y', juce::ModifierKeys::commandModifier, 0) ||
                  key == juce::KeyPress('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) {
             if (undoManager.canRedo()) {
@@ -246,7 +244,7 @@ private:
     std::unique_ptr<MixerPanelComponent> mixerPanel;
     bool showMixer = false;
 
-    juce::UndoManager undoManager; // Gestor global de Deshacer / Rehacer
+    juce::UndoManager undoManager;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
 
