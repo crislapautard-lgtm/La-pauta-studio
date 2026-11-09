@@ -28,8 +28,11 @@ public:
     }
 
 private:
-    // Lista principal que ahora almacena las pistas lógicas
+    // Lista principal que almacena las pistas lógicas (sonido/datos)
     std::vector<std::unique_ptr<Track>> tracks;
+
+    // Lista para almacenar los componentes visuales en la interfaz
+    std::vector<std::unique_ptr<TrackComponent>> trackComponents;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
