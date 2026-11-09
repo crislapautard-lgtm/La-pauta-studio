@@ -23,7 +23,6 @@ public:
 
     bool acceptsMidi() const override;
     bool producesMidi() const override;
-    bool isMuted() const; // <-- Quitamos 'override' porque causaba el error C3668
     double getTailLengthSeconds() const override;
 
     int getNumPrograms() override;
@@ -35,10 +34,12 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // Variables públicas para el volumen y paneo
+    // Variables atómicas conectadas directamente con la interfaz
     std::atomic<float> trackVolume { 0.8f };
     std::atomic<float> trackPan { 0.0f };
     std::atomic<bool> trackMute { false };
+    std::atomic<bool> trackSolo { false };
+    std::atomic<bool> trackRec { false };
 
 private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
