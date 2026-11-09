@@ -12,7 +12,8 @@
 #include "AudioSettingsWindow.h"
 
 class MainComponent : public juce::AudioAppComponent,
-                      public juce::Button::Listener
+                      public juce::Button::Listener,
+                      public juce::Slider::Listener
 {
 public:
     MainComponent() {
@@ -26,6 +27,22 @@ public:
         playButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::green);
         playButton.setClickingTogglesState(true);
         addAndMakeVisible(playButton);
+
+        // Botón de Metrónomo (Click)
+        metronomeButton.setButtonText("Click");
+        metronomeButton.addListener(this);
+        metronomeButton.setColour(juce::TextButton::buttonColourId, juce::Colours::darkgrey);
+        metronomeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::orange);
+        metronomeButton.setClickingTogglesState(true);
+        addAndMakeVisible(metronomeButton);
+
+        // Slider de Control de BPM
+        bpmSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+        bpmSlider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 50, 20);
+        bpmSlider.setRange(60.0, 200.0, 1.0);
+        bpmSlider.setValue(120.0);
+        bpmSlider.addListener(this);
+        addAndMakeVisible(bpmSlider);
 
         // Botón para Añadir Pista
         addTrackButton.setButtonText("+ Pista");
@@ -57,7 +74,7 @@ public:
         mixerPanel = std::make_unique<MixerPanelComponent>(tracks);
         addChildComponent(mixerPanel.get());
 
-        setSize(1020, 700);
+        setSize(1100, 700);
         setAudioChannels(2, 2);
         
         // Habilitar captura de teclado para atajos (Ctrl+Z / Ctrl+Y)
@@ -69,7 +86,6 @@ public:
         shutdownAudio();
     }
 
-    // Captura de atajos de teclado globales para el DAW (Ctrl+Z y Ctrl+Y)
     bool keyPressed(const juce::KeyPress& key, juce::Component* originatingComponent) override {
         if (key == juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0)) {
             if (undoManager.canUndo()) {
@@ -108,6 +124,7 @@ public:
     }
 
     void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override {
+        currentSampleRate = sampleRate;
         for (auto& track : tracks) {
             if (auto* audioTrack = dynamic_cast<AudioTrack*>(track.get())) {
                 audioTrack->prepareToPlay(samplesPerBlockExpected, sampleRate);
@@ -141,10 +158,34 @@ public:
             }
         }
 
+        // --- MOTOR DE METRÓNOMO (CLICK) ---
+        if (metronomeActive && isPlayingState) {
+            double bpm = bpmSlider.getValue();
+            double secondsPerBeat = 60.0 / bpm;
+            double samplesPerBeat = secondsPerBeat * currentSampleRate;
+
+            for (int sample = 0; sample < bufferToFill.numSamples; ++sample) {
+                sampleCounter++;
+                if (sampleCounter >= samplesPerBeat) {
+                    sampleCounter = 0;
+                    playClickSample = true; // Activar pulso de click
+                }
+
+                if (playClickSample) {
+                    // Generar un beep corto de clic en el canal izquierdo y derecho
+                    float clickValue = (sampleCounter < 500) ? 0.3f : 0.0f; 
+                    for (int ch = 0; ch < mixBus.getNumChannels(); ++ch) {
+                        mixBus.addSample(ch, sample, clickValue);
+                    }
+                    if (sampleCounter >= 500) playClickSample = false;
+                }
+            }
+        }
+
         mixBus.applyGain(0.9f); // Master Gain protector anti-clipping
 
         for (int ch = 0; ch < bufferToFill.buffer->getNumChannels(); ++ch) {
-            bufferToFill.buffer->copyFrom(ch, bufferToFill.buffer->getStartSample(), mixBus, ch, 0, bufferToFill.numSamples);
+            bufferToFill.buffer->copyFrom(ch, bufferToFill.buffer$getStartSample(), mixBus, ch, 0, bufferToFill.numSamples);
         }
     }
 
@@ -161,17 +202,24 @@ public:
         
         g.setColour(juce::Colours::white);
         g.setFont(18.0f);
-        g.drawText("LA PAUTA STUDIO - DAW Pro", 20, 15, 300, 30, juce::Justification::left);
+        g.drawText("LA PAUTA STUDIO - DAW Pro", 20, 15, 270, 30, juce::Justification::left);
+
+        // Etiqueta visual para el control de BPM
+        g.setFont(12.0f);
+        g.drawText("BPM:", 310, 20, 35, 20, juce::Justification::right);
     }
 
     void resized() override {
-        // Barra superior de herramientas y controles ordenados de derecha a izquierda
+        // Controles superiores de transporte y herramientas organizados de derecha a izquierda
         playButton.setBounds(getWidth() - 95, 15, 80, 30);
-        addTrackButton.setBounds(getWidth() - 185, 15, 80, 30);
-        saveButton.setBounds(getWidth() - 270, 15, 75, 30);
-        openButton.setBounds(getWidth() - 355, 15, 75, 30);
-        configButton.setBounds(getWidth() - 440, 15, 75, 30);
-        toggleMixerButton.setBounds(getWidth() - 525, 15, 75, 30);
+        metronomeButton.setBounds(getWidth() - 175, 15, 70, 30);
+        bpmSlider.setBounds(350, 15, 130, 30);
+
+        addTrackButton.setBounds(getWidth() - 265, 15, 80, 30);
+        saveButton.setBounds(getWidth() - 350, 15, 75, 30);
+        openButton.setBounds(getWidth() - 435, 15, 75, 30);
+        configButton.setBounds(getWidth() - 520, 15, 75, 30);
+        toggleMixerButton.setBounds(getWidth() - 605, 15, 75, 30);
 
         int startY = 65;
         int trackHeight = 70;
@@ -196,13 +244,16 @@ public:
 
     void buttonClicked (juce::Button* button) override {
         if (button == &playButton) {
-            bool shouldPlay = playButton.getToggleState();
+            isPlayingState = playButton.getToggleState();
             for (auto& track : tracks) {
                 if (auto* audioTrack = dynamic_cast<AudioTrack*>(track.get())) {
-                    if (shouldPlay) audioTrack->startPlayback();
+                    if (isPlayingState) audioTrack->startPlayback();
                     else audioTrack->stopPlayback();
                 }
             }
+        }
+        else if (button == &metronomeButton) {
+            metronomeActive = metronomeButton.getToggleState();
         }
         else if (button == &addTrackButton) {
             addAudioTrack();
@@ -233,7 +284,6 @@ public:
                 });
         }
         else if (button == &configButton) {
-            // Abrir ventana flotante de ajustes de hardware de audio/MIDI
             if (settingsWindow == nullptr) {
                 settingsWindow = std::make_unique<AudioSettingsWindow>(deviceManager);
             }
@@ -245,12 +295,18 @@ public:
         }
     }
 
+    void sliderValueChanged(juce::Slider* slider) override {
+        // Control de BPM del metrónomo
+    }
+
 private:
     AudioEngine audioEngine;
     std::vector<std::unique_ptr<Track>> tracks;
     std::vector<std::unique_ptr<TrackComponent>> trackComponents;
     
     juce::TextButton playButton;
+    juce::TextButton metronomeButton;
+    juce::Slider bpmSlider;
     juce::TextButton addTrackButton;
     juce::TextButton saveButton;
     juce::TextButton openButton;
@@ -259,6 +315,12 @@ private:
 
     std::unique_ptr<MixerPanelComponent> mixerPanel;
     bool showMixer = false;
+
+    bool isPlayingState = false;
+    bool metronomeActive = false;
+    double currentSampleRate = 44100.0;
+    double sampleCounter = 0.0;
+    bool playClickSample = false;
 
     std::unique_ptr<AudioSettingsWindow> settingsWindow;
     juce::UndoManager undoManager;
