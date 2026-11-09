@@ -1,34 +1,25 @@
 #include "MainComponent.h"
 
-MainComponent::MainComponent(AudioPluginAudioProcessor& p) 
-    : audioProcessor(p), vocalTrack("Vocal Principal")
+MainComponent::MainComponent(AudioPluginAudioProcessor& p) : audioProcessor(p)
 {
-    // Conectamos los faders y botones de la UI directamente al procesador de audio en tiempo real
-    vocalTrack.onVolumeChanged = [this](float newVolume) {
-        audioProcessor.trackVolume.store(newVolume);
-    };
+    TrackComponent* tracks[4] = { &track1, &track2, &track3, &track4 };
 
-    vocalTrack.onPanChanged = [this](float newPan) {
-        audioProcessor.trackPan.store(newPan);
-    };
+    for (int i = 0; i < 4; ++i)
+    {
+        tracks[i]->onVolumeChanged = [this, i](float val) { audioProcessor.trackVolume[i].store(val); };
+        tracks[i]->onPanChanged    = [this, i](float val) { audioProcessor.trackPan[i].store(val); };
+        tracks[i]->onMuteToggled   = [this, i](bool val)  { audioProcessor.trackMute[i].store(val); return val; };
+        tracks[i]->onSoloToggled   = [this, i](bool val)  { audioProcessor.trackSolo[i].store(val); return val; };
+        tracks[i]->onRecordToggled = [this, i](bool val)  { audioProcessor.trackRec[i].store(val); return val; };
 
-    vocalTrack.onMuteToggled = [this](bool isMuted) {
-        audioProcessor.trackMute.store(isMuted);
-        return isMuted;
-    };
+        addAndMakeVisible(tracks[i]);
+    }
 
-    vocalTrack.onSoloToggled = [this](bool isSoloed) {
-        audioProcessor.trackSolo.store(isSoloed);
-        return isSoloed;
-    };
+    // Configuración del Master
+    masterTrack.onVolumeChanged = [this](float val) { audioProcessor.masterVolume.store(val); };
+    addAndMakeVisible(masterTrack);
 
-    vocalTrack.onRecordToggled = [this](bool isRec) {
-        audioProcessor.trackRec.store(isRec);
-        return isRec;
-    };
-
-    addAndMakeVisible(vocalTrack);
-    setSize(800, 600);
+    setSize(700, 500);
 }
 
 MainComponent::~MainComponent() {}
@@ -40,5 +31,19 @@ void MainComponent::paint(juce::Graphics& g)
 
 void MainComponent::resized()
 {
-    vocalTrack.setBounds(20, 20, 120, 450);
+    auto area = getLocalBounds().reduced(15);
+    int trackWidth = 120;
+    int spacing = 15;
+
+    // Distribuimos las 4 pistas y dejamos un espacio para el Master al final
+    TrackComponent* tracks[4] = { &track1, &track2, &track3, &track4 };
+    for (int i = 0; i < 4; ++i)
+    {
+        tracks[i]->setBounds(area.removeFromLeft(trackWidth));
+        area.removeFromLeft(spacing);
+    }
+
+    // Canal Master separado a la derecha
+    area.removeFromLeft(20);
+    masterTrack.setBounds(area.removeFromLeft(trackWidth));
 }
