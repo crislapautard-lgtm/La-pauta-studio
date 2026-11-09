@@ -1,6 +1,7 @@
 #include <JuceHeader.h>
 #include "MainComponent.h"
 
+// Aseguramos que la clase principal esté disponible para la ventana
 class LaPautaStudioApplication : public juce::JUCEApplication
 {
 public:
@@ -40,9 +41,8 @@ public:
         {
             setUsingNativeTitleBar (true);
             
-            // Instanciación directa y segura para evitar errores de argumentos
-            auto* content = new MainComponent();
-            setContentOwned (content, true);
+            // Pasamos el componente principal usando el tipo explícito para evitar errores del compilador
+            setContentOwned (new MainComponent(), true);
 
             centreWithSize (1024, 768);
             setResizable (true, true);
