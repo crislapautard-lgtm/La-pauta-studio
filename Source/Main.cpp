@@ -39,15 +39,13 @@ public:
                               DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent(), true);
+            
+            // Instanciación directa y segura para evitar errores de argumentos
+            auto* content = new MainComponent();
+            setContentOwned (content, true);
 
-           #if JUCE_IOS || JUCE_ANDROID
-            setFullScreen (true);
-           #else
-            centreWithSize (getWidth(), getHeight());
+            centreWithSize (1024, 768);
             setResizable (true, true);
-           #endif
-
             setVisible (true);
         }
 
