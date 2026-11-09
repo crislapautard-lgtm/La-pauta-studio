@@ -34,10 +34,11 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // Control de Grabación externo para la interfaz
+    // Controles externos (Grabación y Tempo dinámico)
     void setTrackRecording(int trackIndex, bool isRecording);
+    void setBPM(float bpm);
 
-    // --- ARQUITECTURA DE ESTUDIO CON GRABACIÓN ---
+    // --- ARQUITECTURA DE ESTUDIO ---
     static constexpr int numTracks = 16;
     static constexpr int numSubgroups = 4;
     static constexpr int numAuxes = 2;
@@ -51,12 +52,11 @@ public:
     std::atomic<int>   trackSubgroupAssign[numTracks];
     std::atomic<float> trackSend[numTracks][numAuxes];
 
-    // Parámetros de Subgrupos y Auxiliares
+    // Subgrupos, Auxiliares, Master y Tempo
     std::atomic<float> subgroupVolume[numSubgroups];
     std::atomic<float> auxVolume[numAuxes];
-
-    // Master Global
     std::atomic<float> masterVolume { 0.9f };
+    std::atomic<float> currentBPM { 120.0f }; // Ajustable en tiempo real
 
 private:
     double currentSampleRate = 44100.0;
