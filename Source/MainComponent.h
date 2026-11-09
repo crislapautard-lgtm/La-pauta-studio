@@ -12,7 +12,6 @@ public:
     void resized() override;
 
 private:
-    // Nuestra primera pista de prueba en la mezcladora
     TrackComponent vocalTrack;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
