@@ -2,181 +2,123 @@
 #include <JuceHeader.h>
 #include "Track.h"
 
-class AudioTrack : public Track, public juce::AudioSource {
+class AudioTrack : public Track {
 public:
-    AudioTrack(const juce::String& name) : Track(name), backgroundThread("Audio Recorder Thread") {
-        backgroundThread.startThread();
-        formatManager.registerBasicFormats();
-        pluginFormatManager.addDefaultFormats();
+    AudioTrack(const std::string& name) : Track(name) {
+        formatManager.addBasicFormats();
     }
 
-    ~AudioTrack() {
-        stopRecording();
-        stopPlayback();
-        if (loadedPlugin != nullptr) {
-            loadedPlugin->releaseResources();
+    ~AudioTrack() override {
+        if (activePlugin != nullptr && pluginEditorWindow != nullptr) {
+            pluginEditorWindow.reset();
         }
-        backgroundThread.stopThread(500);
     }
 
-    void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override {
+    void prepareToPlay(int samplesPerBlockExpected, double sampleRate) {
         currentSampleRate = sampleRate;
         transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
         
-        if (loadedPlugin != nullptr) {
-            loadedPlugin->prepareToPlay(sampleRate, samplesPerBlockExpected);
+        if (activePlugin != nullptr) {
+            activePlugin->prepareToPlay(sampleRate, samplesPerBlockExpected);
         }
     }
 
-    void releaseResources() override {
+    void releaseResources() {
         transportSource.releaseResources();
-        if (loadedPlugin != nullptr) {
-            loadedPlugin->releaseResources();
+        if (activePlugin != nullptr) {
+            activePlugin->releaseResources();
         }
     }
 
     void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override {
-        if (muted) {
-            buffer.clear();
-            return;
-        }
+        if (muted) return;
 
-        // Si hay reproducción activa, inyectamos el audio del archivo grabado
+        // 1. Procesar audio desde el archivo de audio cargado si hay reproducción activa
         if (isPlaying && readerSource != nullptr) {
-            juce::AudioSourceChannelInfo bufferInfo(buffer);
-            transportSource.getNextAudioBlock(bufferInfo);
+            juce::AudioSourceChannelInfo sourceInfo(&buffer, 0, buffer.getNumSamples());
+            transportSource.getNextAudioBlock(sourceInfo);
         }
 
-        // Procesamiento VST3 / Plugin en tiempo real
-        if (loadedPlugin != nullptr) {
-            juce::MidiBuffer emptyMidi;
-            loadedPlugin->processBlock(buffer, emptyMidi);
+        // 2. Si hay un plugin VST3 cargado, procesamos el audio a través de él
+        if (activePlugin != nullptr) {
+            juce::MidiBuffer dummyMidi;
+            activePlugin->processBlock(buffer, dummyMidi);
         }
 
-        // Aplicar Paneo Estéreo y Volumen de la Pista
-        if (buffer.getNumChannels() >= 2) {
-            float leftGain  = (pan <= 0.0f) ? 1.0f : (1.0f - pan);
-            float rightGain = (pan >= 0.0f) ? 1.0f : (1.0f + pan);
-            
-            buffer.applyGain(0, 0, buffer.getNumSamples(), leftGain * volume);
-            buffer.applyGain(1, 0, buffer.getNumSamples(), rightGain * volume);
-        } else {
-            buffer.applyGain(volume);
+        // 3. Aplicar Ganancia de Panal (Volumen y Paneo estéreo básico)
+        buffer.applyGain(volume);
+    }
+
+    // --- CARGAR ARCHIVO DE AUDIO ---
+    void loadAudioFile(const juce::File& file) {
+        audioFile = file;
+        auto* reader = formatManager.createReaderFor(file);
+        if (reader != nullptr) {
+            auto newSource = std::make_unique<juce::AudioFormatReaderSource>(reader, true);
+            transportSource.setSource(newSource.get(), 0, &readAheadThread, reader->sampleRate);
+            readerSource = std::move(newSource);
         }
     }
 
-    // --- CARGAR Y REPRODUCIR AUDIO ---
-    void loadAudioFile(const juce::File& file) {
-        stopPlayback();
-        currentAudioFile = file;
-        if (auto* reader = formatManager.createReaderFor(file)) {
-            readerSource.reset(new juce::AudioFormatReaderSource(reader, true));
-            transportSource.setSource(readerSource.get(), 0, &backgroundThread, reader->sampleRate);
+    // --- CARGAR PLUGIN VST3 ---
+    void loadPlugin(const juce::File& file) {
+        juce::VST3PluginFormat vst3Format;
+        juce::PluginDescription description;
+        description.fileOrIdentifier = file.getFullPathName();
+        description.pluginFormatName = "VST3";
+
+        juce::String errorMessage;
+        activePlugin = vst3Format.createPluginInstance(description, currentSampleRate, 512, errorMessage);
+
+        if (activePlugin != nullptr) {
+            activePlugin->prepareToPlay(currentSampleRate, 512);
+        }
+    }
+
+    // --- ABRIR LA INTERFAZ GRÁFICA (EDITOR) DEL VST3 EN VENTANA FLOTANTE ---
+    void openPluginEditor() {
+        if (activePlugin != nullptr && activePlugin->hasEditor()) {
+            auto* editor = activePlugin->createEditor();
+            if (editor != nullptr) {
+                pluginEditorWindow = std::make_unique<PluginWindow>(editor, getName());
+            }
         }
     }
 
     void startPlayback() {
         if (readerSource != nullptr) {
+            transportSource.setPosition(0.0);
             transportSource.start();
-            isPlaying = true;
         }
+        isPlaying = true;
     }
 
     void stopPlayback() {
         transportSource.stop();
-        transportSource.setPosition(0.0);
         isPlaying = false;
     }
 
-    juce::File getCurrentAudioFilePath() const {
-        return currentAudioFile;
-    }
+    void setVolume(float newVolume) { volume = newVolume; }
+    float getVolume() const { return volume; }
 
-    // --- CARGAR PLUGIN VST3 ---
-    void loadPlugin(const juce::File& file, std::function<void(const juce::String&)> callback) {
-        pluginFormatFinder.findAllTypesForFile(pluginFormatManager, file.getFullPathName(), [this, callback](const juce::OwnedArray<juce::PluginDescription>& descriptions) {
-            if (!descriptions.isEmpty()) {
-                pluginFormatManager.createPluginInstance(*descriptions[0], currentSampleRate, 512, [this, callback](std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error) {
-                    if (instance != nullptr) {
-                        loadedPlugin = std::move(instance);
-                        loadedPlugin->prepareToPlay(currentSampleRate, 512);
-                        pluginName = loadedPlugin->getName();
-                        callback(pluginName);
-                    } else {
-                        callback("Error: " + error);
-                    }
-                });
-            } else {
-                callback("Formato no válido");
-            }
-        });
-    }
+    void setPan(float newPan) { pan = newPan; }
+    float getPan() const { return pan; }
 
-    void removePlugin() {
-        if (loadedPlugin != nullptr) {
-            loadedPlugin->releaseResources();
-            loadedPlugin.reset();
-            pluginName = "";
-        }
-    }
+    void setMute(bool shouldMute) { muted = shouldMute; }
+    bool isMuted() const { return muted; }
 
-    juce::String getPluginName() const { return pluginName; }
+    void setSolo(bool shouldSolo) { soloed = shouldSolo; }
+    bool isSoloed() const { return soloed; }
 
-    // --- GRABACIÓN EN DISCO ---
-    void processRecording(const float* const* inputChannelData, int numChannels, int numSamples) {
-        if (!isRecording || !threadedWriter)
-            return;
-
-        threadedWriter->write(inputChannelData, numSamples);
-    }
-
-    void startRecording(const juce::File& file, double sampleRate) {
-        if (isRecording) return;
-
-        file.deleteFile();
-        outputFile = file;
-
-        juce::WavAudioFormat wavFormat;
-        juce::AudioFormatWriterOptions options;
-        options.file = outputFile;
-        options.sampleRate = sampleRate;
-        options.numChannels = 2;
-        options.bitsPerSample = 24;
-        options.qualityOptionIndex = 0;
-
-        if (auto* writer = wavFormat.createWriterFor(options)) {
-            threadedWriter.reset(new juce::AudioFormatWriter::ThreadedWriter(writer, backgroundThread, 32768));
-            isRecording = true;
-        }
-    }
-
-    void stopRecording() {
-        if (!isRecording) return;
-
-        isRecording = false;
-        threadedWriter.reset();
-        loadAudioFile(outputFile);
-    }
-
-    bool getIsRecording() const { return isRecording; }
+    juce::File getCurrentAudioFilePath() const { return audioFile; }
 
 private:
-    bool isRecording = false;
-    bool isPlaying = false;
-    double currentSampleRate = 44100.0;
-    
-    juce::File outputFile;
-    juce::File currentAudioFile;
-    juce::TimeSliceThread backgroundThread;
-    std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> threadedWriter;
+    // Ventana flotante independiente para la interfaz gráfica del VST3
+    class PluginWindow : public juce::DocumentWindow {
+    public:
+        PluginWindow(juce::AudioProcessorEditor* editor, const juce::String& trackName)
+            : DocumentWindow("Plugin: " + trackName,
+                             juce::Desktop::getInstance().getDefaultLookAndFeel()
+                                 .findColour(juce::ResizableWindow::backgroundColourId),
+                             DocumentWindow::allButtons)
 
-    juce::AudioFormatManager formatManager;
-    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
-    juce::AudioTransportSource transportSource;
-
-    // VST3 Hosting
-    juce::AudioPluginFormatManager pluginFormatManager;
-    juce::PluginDirectoryScanThread pluginFormatFinder{pluginFormatManager};
-    std::unique_ptr<juce::AudioPluginInstance> loadedPlugin;
-    juce::String pluginName = "";
-};
