@@ -14,7 +14,8 @@
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::Button::Listener,
-                      public juce::Slider::Listener
+                      public juce::Slider::Listener,
+                      public juce::KeyListener
 {
 public:
     MainComponent() {
@@ -66,7 +67,6 @@ public:
         midiEditorButton.addListener(this);
         addAndMakeVisible(midiEditorButton);
 
-        // --- NUEVO BOTÓN DE EXPORTAR MEZCLA ---
         exportButton.setButtonText("Exportar");
         exportButton.addListener(this);
         addAndMakeVisible(exportButton);
@@ -85,8 +85,7 @@ public:
         shutdownAudio();
     }
 
-    bool keyPressed(const juce::KeyPress& key, juce::Component* originatingComponent) override {
-        // Ctrl + Z (Deshacer)
+    bool keyPressed(const juce::KeyPress& key, juce::Component*) override {
         if (key == juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0)) {
             if (undoManager.canUndo()) {
                 undoManager.undo();
@@ -94,7 +93,6 @@ public:
                 return true;
             }
         }
-        // Ctrl + Y o Ctrl + Shift + Z (Rehacer)
         else if (key == juce::KeyPress('y', juce::ModifierKeys::commandModifier, 0) ||
                  key == juce::KeyPress('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) {
             if (undoManager.canRedo()) {
@@ -103,7 +101,6 @@ public:
                 return true;
             }
         }
-        // Ctrl + S (Guardar Proyecto Rápido)
         else if (key == juce::KeyPress('s', juce::ModifierKeys::commandModifier, 0)) {
             fileChooser = std::make_unique<juce::FileChooser>("Guardar Sesión de La Pauta Studio",
                                                               juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
@@ -119,6 +116,8 @@ public:
         }
         return false;
     }
+
+    bool keyStateChanged(bool, juce::Component*) override { return false; }
 
     void addAudioTrack() {
         undoManager.beginNewTransaction("Añadir Pista de Audio");
@@ -148,7 +147,7 @@ public:
     }
 
     void getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill) override {
-        bufferToFill.clearBuffer();
+        bufferToFill.buffer->clear();
 
         juce::MidiBuffer midiMessages;
         juce::AudioBuffer<float> mixBus(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
@@ -244,8 +243,6 @@ public:
         configButton.setBounds(getWidth() - 520, 15, 75, 30);
         toggleMixerButton.setBounds(getWidth() - 605, 15, 75, 30);
         midiEditorButton.setBounds(getWidth() - 700, 15, 90, 30);
-        
-        // Posicionar el botón de Exportar en la barra superior
         exportButton.setBounds(getWidth() - 785, 15, 80, 30);
 
         int startY = 65;
@@ -324,7 +321,6 @@ public:
             midiEditorWindow = std::make_unique<MidiEditorWindow>("Pista MIDI Principal");
         }
         else if (button == &exportButton) {
-            // Lógica para exportar la mezcla a un archivo WAV de 24 bits
             fileChooser = std::make_unique<juce::FileChooser>("Exportar Mezcla a WAV",
                                                               juce::File::getSpecialLocation(juce::File::userMusicDirectory),
                                                               "*.wav");
@@ -341,7 +337,6 @@ public:
                         );
 
                         if (writer != nullptr) {
-                            // Iniciar reproducción de los tracks para el renderizado
                             for (auto& track : tracks) {
                                 if (auto* at = dynamic_cast<AudioTrack*>(track.get())) {
                                     at->startPlayback();
@@ -349,7 +344,7 @@ public:
                             }
 
                             const int numSamplesPerBlock = 512;
-                            double totalSeconds = 20.0; // Duración de exportación de prueba (puedes ajustarla)
+                            double totalSeconds = 20.0;
                             int totalBlocks = (int)((totalSeconds * currentSampleRate) / numSamplesPerBlock);
 
                             for (int b = 0; b < totalBlocks; ++b) {
@@ -382,7 +377,6 @@ public:
                                 writer->writeFromAudioSampleBuffer(mixBus, 0, numSamplesPerBlock);
                             }
 
-                            // Detener tracks tras finalizar el render
                             for (auto& track : tracks) {
                                 if (auto* at = dynamic_cast<AudioTrack*>(track.get())) {
                                     at->stopPlayback();
@@ -394,7 +388,7 @@ public:
         }
     }
 
-    void sliderValueChanged(juce::Slider* slider) override {}
+    void sliderValueChanged(juce::Slider*) override {}
 
 private:
     AudioEngine audioEngine;
@@ -410,7 +404,7 @@ private:
     juce::TextButton configButton;
     juce::TextButton toggleMixerButton;
     juce::TextButton midiEditorButton;
-    juce::TextButton exportButton; // Botón para exportar a WAV
+    juce::TextButton exportButton;
 
     std::unique_ptr<MixerPanelComponent> mixerPanel;
     bool showMixer = false;
