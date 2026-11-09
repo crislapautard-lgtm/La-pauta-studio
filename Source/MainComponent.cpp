@@ -1,12 +1,30 @@
 #include "MainComponent.h"
-#include "PluginProcessor.h"
 
-MainComponent::MainComponent() 
-    : vocalTrack("Vocal Principal")
+MainComponent::MainComponent(AudioPluginAudioProcessor& p) 
+    : audioProcessor(p), vocalTrack("Vocal Principal")
 {
-    // Esto hace que al mover el fader en la pantalla, el motor de audio baje o suba el volumen real
+    // Conectamos los faders y botones de la UI directamente al procesador de audio en tiempo real
     vocalTrack.onVolumeChanged = [this](float newVolume) {
-        // Aquí conectamos con el procesador
+        audioProcessor.trackVolume.store(newVolume);
+    };
+
+    vocalTrack.onPanChanged = [this](float newPan) {
+        audioProcessor.trackPan.store(newPan);
+    };
+
+    vocalTrack.onMuteToggled = [this](bool isMuted) {
+        audioProcessor.trackMute.store(isMuted);
+        return isMuted;
+    };
+
+    vocalTrack.onSoloToggled = [this](bool isSoloed) {
+        audioProcessor.trackSolo.store(isSoloed);
+        return isSoloed;
+    };
+
+    vocalTrack.onRecordToggled = [this](bool isRec) {
+        audioProcessor.trackRec.store(isRec);
+        return isRec;
     };
 
     addAndMakeVisible(vocalTrack);
