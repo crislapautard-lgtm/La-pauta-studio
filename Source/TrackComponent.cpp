@@ -1,103 +1,70 @@
 #include "TrackComponent.h"
 
-TrackComponent::TrackComponent(const juce::String& trackName) : name(trackName)
+TrackComponent::TrackComponent(const juce::String& name) : trackName(name)
 {
-    titleLabel.setText(name, juce::dontSendNotification);
-    titleLabel.setJustificationType(juce::Justification::centred);
-    titleLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(titleLabel);
-
-    volumeSlider.setSliderStyle(juce::Slider::LinearVertical);
-    volumeSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 20);
+    volumeSlider.setSliderStyle(juce::Slider::LinearBarVertical);
     volumeSlider.setRange(0.0, 1.0, 0.01);
     volumeSlider.setValue(0.8);
-    volumeSlider.addListener(this);
+    volumeSlider.onValueChange = [this] {
+        if (onVolumeChanged)
+            onVolumeChanged((float)volumeSlider.getValue());
+    };
     addAndMakeVisible(volumeSlider);
 
     panSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     panSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     panSlider.setRange(-1.0, 1.0, 0.01);
     panSlider.setValue(0.0);
-    panSlider.addListener(this);
+    panSlider.onValueChange = [this] {
+        if (onPanChanged)
+            onPanChanged((float)panSlider.getValue());
+    };
     addAndMakeVisible(panSlider);
 
-    muteButton.setButtonText("M");
-    muteButton.setClickingTogglesState(true);
-    muteButton.addListener(this);
-    muteButton.setColour(juce::TextButton::buttonColourId, juce::Colours::darkred);
+    muteButton.onClick = [this] {
+        if (onMuteToggled)
+            onMuteToggled(muteButton.getToggleState());
+    };
     addAndMakeVisible(muteButton);
 
-    soloButton.setButtonText("S");
-    soloButton.setClickingTogglesState(true);
-    soloButton.addListener(this);
-    soloButton.setColour(juce::TextButton::buttonColourId, juce::Colours::darkgoldenrod);
+    soloButton.onClick = [this] {
+        if (onSoloToggled)
+            onSoloToggled(soloButton.getToggleState());
+    };
     addAndMakeVisible(soloButton);
 
-    recordButton.setButtonText("REC");
-    recordButton.setClickingTogglesState(true);
-    recordButton.addListener(this);
-    recordButton.setColour(juce::TextButton::buttonColourId, juce::Colours::maroon);
-    addAndMakeVisible(recordButton);
-
-    setSize(120, 400);
+    recButton.onClick = [this] {
+        if (onRecordToggled)
+            onRecordToggled(recButton.getToggleState());
+    };
+    addAndMakeVisible(recButton);
 }
 
 TrackComponent::~TrackComponent() {}
 
 void TrackComponent::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff2d2d2d));
-    g.setColour(juce::Colour(0xff404040));
-    g.drawRect(getLocalBounds(), 1);
+    g.fillAll(juce::Colour(0xff2b2b2b));
+    g.setColour(juce::Colours::white);
+    g.setFont(13.0f);
+    g.drawText(trackName, 0, 5, getWidth(), 20, juce::Justification::centred, true);
 }
 
 void TrackComponent::resized()
 {
-    auto area = getLocalBounds().reduced(10);
+    auto bounds = getLocalBounds().reduced(5);
+    bounds.removeFromTop(25);
 
-    titleLabel.setBounds(area.removeFromTop(30));
-    area.removeFromTop(10);
+    recButton.setBounds(bounds.removeFromTop(22));
+    bounds.removeFromTop(5);
+    
+    auto muteSolo = bounds.removeFromTop(22);
+    muteButton.setBounds(muteSolo.removeFromLeft(muteSolo.getWidth() / 2));
+    soloButton.setBounds(muteSolo);
 
-    auto topButtons = area.removeFromTop(25);
-    int buttonWidth = topButtons.getWidth() / 3;
-    muteButton.setBounds(topButtons.removeFromLeft(buttonWidth).reduced(2));
-    soloButton.setBounds(topButtons.removeFromLeft(buttonWidth).reduced(2));
-    recordButton.setBounds(topButtons.reduced(2));
+    bounds.removeFromTop(5);
+    panSlider.setBounds(bounds.removeFromTop(50));
 
-    area.removeFromTop(15);
-    panSlider.setBounds(area.removeFromTop(60).reduced(20, 0));
-    area.removeFromTop(10);
-    volumeSlider.setBounds(area);
-}
-
-void TrackComponent::buttonClicked(juce::Button* button)
-{
-    if (button == &muteButton) {
-        bool state = muteButton.getToggleState();
-        muteButton.setColour(juce::TextButton::buttonColourId, state ? juce::Colours::red : juce::Colours::darkred);
-        if (onMuteToggled) onMuteToggled(state);
-    }
-    else if (button == &soloButton) {
-        bool state = soloButton.getToggleState();
-        soloButton.setColour(juce::TextButton::buttonColourId, state ? juce::Colours::yellow : juce::Colours::darkgoldenrod);
-        if (onSoloToggled) onSoloToggled(state);
-    }
-    else if (button == &recordButton) {
-        bool state = recordButton.getToggleState();
-        // Corregido: Usamos recordButton y un color válido de JUCE (green)
-        recordButton.setColour(juce::TextButton::buttonColourId, state ? juce::Colours::green : juce::Colours::maroon);
-        if (onRecordToggled) onRecordToggled(state);
-    }
-}
-
-void TrackComponent::sliderValueChanged(juce::Slider* slider)
-{
-    if (slider == &volumeSlider) {
-        float val = (float)volumeSlider.getValue();
-        if (onVolumeChanged) onVolumeChanged(val);
-    }
-    else if (slider == &panSlider) {
-        float panVal = (float)panSlider.getValue();
-        if (onPanChanged) onPanChanged(panVal);
-    }
+    bounds.removeFromTop(5);
+    volumeSlider.setBounds(bounds);
 }
