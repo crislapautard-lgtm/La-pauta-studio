@@ -19,7 +19,6 @@ AudioPluginAudioProcessor::~AudioPluginAudioProcessor() {}
 const juce::String AudioPluginAudioProcessor::getName() const { return JucePlugin_Name; }
 bool AudioPluginAudioProcessor::acceptsMidi() const { return false; }
 bool AudioPluginAudioProcessor::producesMidi() const { return false; }
-bool AudioPluginAudioProcessor::isMuted() const { return false; }
 double AudioPluginAudioProcessor::getTailLengthSeconds() const { return 0.0; }
 int AudioPluginAudioProcessor::getNumPrograms() override { return 1; }
 int AudioPluginAudioProcessor::getCurrentProgram() override { return 0; }
@@ -49,13 +48,14 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
+    // Si está en Mute, silenciamos la salida
     if (trackMute.load()) {
         buffer.clear();
         return;
     }
 
     float vol = trackVolume.load();
-    float pan = trackPan.load();
+    float pan = trackPan.load(); // -1.0 izq, 1.0 der
 
     float leftGain  = vol * (pan <= 0.0f ? 1.0f : 1.0f - pan);
     float rightGain = vol * (pan >= 0.0f ? 1.0f : 1.0f + pan);
@@ -69,6 +69,14 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
         {
             channelDataLeft[i]  *= leftGain;
             channelDataRight[i] *= rightGain;
+        }
+    }
+    else if (totalNumInputChannels == 1)
+    {
+        auto* channelData = buffer.getWritePointer (0);
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            channelData[i] *= vol;
         }
     }
 }
