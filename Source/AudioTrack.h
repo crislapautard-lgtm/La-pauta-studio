@@ -2,15 +2,26 @@
 #include <JuceHeader.h>
 #include "Track.h"
 
-class AudioTrack : public Track {
+class AudioTrack : public Track, public juce::AudioSource {
 public:
     AudioTrack(const juce::String& name) : Track(name), backgroundThread("Audio Recorder Thread") {
         backgroundThread.startThread();
+        formatManager.registerBasicFormats();
     }
 
     ~AudioTrack() {
         stopRecording();
+        stopPlayback();
         backgroundThread.stopThread(500);
+    }
+
+    void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override {
+        currentSampleRate = sampleRate;
+        transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
+    }
+
+    void releaseResources() override {
+        transportSource.releaseResources();
     }
 
     void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override {
@@ -19,28 +30,52 @@ public:
             return;
         }
 
-        // Aplicamos el control de volumen general de la pista
-        buffer.applyGain(volume);
+        // Si hay reproducción activa, inyectamos el audio del archivo grabado
+        if (isPlaying && readerSource != nullptr) {
+            juce::AudioSourceChannelInfo bufferInfo(buffer);
+            transportSource.getNextAudioBlock(bufferInfo);
+        }
 
-        // Aquí puedes seguir procesando efectos o paneo estéreo
+        // Aplicar Paneo Estéreo y Volumen de la Pista en tiempo real
+        if (buffer.getNumChannels() >= 2) {
+            float leftGain  = (pan <= 0.0f) ? 1.0f : (1.0f - pan);
+            float rightGain = (pan >= 0.0f) ? 1.0f : (1.0f + pan);
+            
+            buffer.applyGain(0, 0, buffer.getNumSamples(), leftGain * volume);
+            buffer.applyGain(1, 0, buffer.getNumSamples(), rightGain * volume);
+        } else {
+            buffer.applyGain(volume);
+        }
     }
 
-    // Métodos para controlar la mezcla desde la interfaz (TrackComponent)
-    void setVolume(float newVolume) { volume = newVolume; }
-    void setPan(float newPan)       { pan = newPan; }
-    void setMute(bool shouldMute)   { muted = shouldMute; }
-    void setSolo(bool shouldSolo)   { soloed = shouldSolo; }
+    // --- CARGAR Y REPRODUCIR AUDIO (LO QUE GRABASTE) ---
+    void loadAudioFile(const juce::File& file) {
+        stopPlayback();
+        if (auto* reader = formatManager.createReaderFor(file)) {
+            readerSource.reset(new juce::AudioFormatReaderSource(reader, true));
+            transportSource.setSource(readerSource.get(), 0, &backgroundThread, reader->sampleRate);
+        }
+    }
 
-    // Método para capturar y escribir el audio entrante en un archivo WAV real
+    void startPlayback() {
+        transportSource.start();
+        isPlaying = true;
+    }
+
+    void stopPlayback() {
+        transportSource.stop();
+        transportSource.setPosition(0.0);
+        isPlaying = false;
+    }
+
+    // --- GRABACIÓN EN DISCO ---
     void processRecording(const float* const* inputChannelData, int numChannels, int numSamples) {
         if (!isRecording || !threadedWriter)
             return;
 
-        // Enviamos el bloque de audio al escritor en segundo plano de forma segura
         threadedWriter->write(inputChannelData, numSamples);
     }
 
-    // Iniciar grabación en un archivo específico (Actualizado con AudioFormatWriterOptions de JUCE)
     void startRecording(const juce::File& file, double sampleRate) {
         if (isRecording) return;
 
@@ -49,42 +84,43 @@ public:
 
         juce::WavAudioFormat wavFormat;
         
-        // Forma moderna compatible con las últimas versiones de JUCE
+        // Versión moderna y limpia compatible con las exigencias de JUCE
         juce::AudioFormatWriterOptions options;
         options.file = outputFile;
         options.sampleRate = sampleRate;
-        options.numChannels = 2; // Estéreo
-        options.bitsPerSample = 24; // 24-bit de calidad profesional
+        options.numChannels = 2; // Estéreo profesional
+        options.bitsPerSample = 24; // 24-bit
         options.qualityOptionIndex = 0;
 
-        if (auto* writer = wavFormat.createWriterFor (options))
-        {
-            // Creamos el escritor con hilo seguro para evitar cortes de audio
+        if (auto* writer = wavFormat.createWriterFor(options)) {
             threadedWriter.reset(new juce::AudioFormatWriter::ThreadedWriter(writer, backgroundThread, 32768));
             isRecording = true;
         }
     }
 
-    // Detener grabación y cerrar el archivo correctamente
     void stopRecording() {
         if (!isRecording) return;
 
         isRecording = false;
-        
-        // Al destruir el threadedWriter, se vacía el búfer pendiente y se cierra el archivo .wav en disco
         threadedWriter.reset();
+        
+        // Al terminar de grabar, cargamos el archivo automáticamente para poder escucharlo
+        loadAudioFile(outputFile);
     }
 
     bool getIsRecording() const { return isRecording; }
 
 private:
     bool isRecording = false;
+    bool isPlaying = false;
+    double currentSampleRate = 44100.0;
+    
     juce::File outputFile;
     juce::TimeSliceThread backgroundThread;
     std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> threadedWriter;
 
-    // Parámetros de Mezcla (Mixer)
-    float volume = 0.8f;
-    float pan = 0.0f;      // -1.0 Izquierda, 0.0 Centro, 1.0 Derecha
-    bool soloed = false;
+    // Componentes de Reproducción
+    juce::AudioFormatManager formatManager;
+    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
+    juce::AudioTransportSource transportSource;
 };
