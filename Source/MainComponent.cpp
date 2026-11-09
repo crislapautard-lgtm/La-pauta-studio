@@ -2,24 +2,32 @@
 
 MainComponent::MainComponent(AudioPluginAudioProcessor& p) : audioProcessor(p)
 {
-    TrackComponent* tracks[4] = { &track1, &track2, &track3, &track4 };
-
-    for (int i = 0; i < 4; ++i)
+    // Creamos las 16 pistas vocales/instrumentales
+    for (int i = 0; i < AudioPluginAudioProcessor::numTracks; ++i)
     {
-        tracks[i]->onVolumeChanged = [this, i](float val) { audioProcessor.trackVolume[i].store(val); };
-        tracks[i]->onPanChanged    = [this, i](float val) { audioProcessor.trackPan[i].store(val); };
-        tracks[i]->onMuteToggled   = [this, i](bool val)  { audioProcessor.trackMute[i].store(val); return val; };
-        tracks[i]->onSoloToggled   = [this, i](bool val)  { audioProcessor.trackSolo[i].store(val); return val; };
-        tracks[i]->onRecordToggled = [this, i](bool val)  { audioProcessor.trackRec[i].store(val); return val; };
+        auto trackName = "Vocal " + juce::String(i + 1);
+        auto trackComp = std::make_unique<TrackComponent>(trackName);
 
-        addAndMakeVisible(tracks[i]);
+        trackComp->onVolumeChanged = [this, i](float val) { audioProcessor.trackVolume[i].store(val); };
+        trackComp->onPanChanged    = [this, i](float val) { audioProcessor.trackPan[i].store(val); };
+        trackComp->onMuteToggled   = [this, i](bool val)  { audioProcessor.trackMute[i].store(val); return val; };
+        trackComp->onSoloToggled   = [this, i](bool val)  { audioProcessor.trackSolo[i].store(val); return val; };
+        trackComp->onRecordToggled = [this, i](bool val)  { audioProcessor.trackRec[i].store(val); return val; };
+
+        trackContainer.addAndMakeVisible(trackComp.get());
+        tracks.push_back(std::move(trackComp));
     }
 
     // Configuración del Master
     masterTrack.onVolumeChanged = [this](float val) { audioProcessor.masterVolume.store(val); };
-    addAndMakeVisible(masterTrack);
+    trackContainer.addAndMakeVisible(masterTrack);
 
-    setSize(700, 500);
+    // Configuramos el viewport para desplazamiento horizontal fluido
+    viewport.setViewedComponent(&trackContainer, false);
+    viewport.setScrollBarsShown(true, true);
+    addAndMakeVisible(viewport);
+
+    setSize(900, 520);
 }
 
 MainComponent::~MainComponent() {}
@@ -31,19 +39,22 @@ void MainComponent::paint(juce::Graphics& g)
 
 void MainComponent::resized()
 {
-    auto area = getLocalBounds().reduced(15);
-    int trackWidth = 120;
-    int spacing = 15;
+    viewport.setBounds(getLocalBounds());
 
-    // Distribuimos las 4 pistas y dejamos un espacio para el Master al final
-    TrackComponent* tracks[4] = { &track1, &track2, &track3, &track4 };
-    for (int i = 0; i < 4; ++i)
+    int trackWidth = 120;
+    int spacing = 10;
+    int totalWidth = (AudioPluginAudioProcessor::numTracks * (trackWidth + spacing)) + trackWidth + 40; // 16 pistas + Master
+
+    trackContainer.setBounds(0, 0, totalWidth, getHeight() - 20);
+
+    int xPos = 15;
+    for (int i = 0; i < AudioPluginAudioProcessor::numTracks; ++i)
     {
-        tracks[i]->setBounds(area.removeFromLeft(trackWidth));
-        area.removeFromLeft(spacing);
+        tracks[i]->setBounds(xPos, 15, trackWidth, 450);
+        xPos += trackWidth + spacing;
     }
 
-    // Canal Master separado a la derecha
-    area.removeFromLeft(20);
-    masterTrack.setBounds(area.removeFromLeft(trackWidth));
+    // Separador visual y colocación del fader Master al final del scroll
+    xPos += 20;
+    masterTrack.setBounds(xPos, 15, trackWidth, 450);
 }
