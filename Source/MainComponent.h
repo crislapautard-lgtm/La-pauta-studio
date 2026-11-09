@@ -15,7 +15,6 @@ public:
 private:
     AudioPluginAudioProcessor& audioProcessor;
     
-    // Contenedor con barra de desplazamiento para que quepan holgadas las 16 pistas + Master
     juce::Viewport viewport;
     juce::Component trackContainer;
 
