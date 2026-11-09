@@ -16,4 +16,10 @@ jobs:
 
       - name: Build Installer with Inno Setup
         run: iscc installer.iss
-        
+
+      - name: Upload Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LaPautaStudio-Installer
+          path: LaPautaStudio_Installer.exe
+          
