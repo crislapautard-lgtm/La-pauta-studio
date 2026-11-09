@@ -7,8 +7,9 @@
 #include "Track.h"
 #include "AudioTrack.h"
 #include "MidiTrack.h"
+#include "AudioEngine.h"
 
-class MainComponent : public juce::Component
+class MainComponent : public juce::AudioAppComponent
 {
 public:
     MainComponent();
@@ -16,6 +17,11 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+
+    // Métodos obligatorios del ciclo de vida de audio en tiempo real de JUCE
+    void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override;
+    void getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill) override;
+    void releaseResources() override;
 
     // Función para crear una nueva pista de audio
     void addAudioTrack() {
@@ -28,6 +34,9 @@ public:
     }
 
 private:
+    // Motor encargado de procesar las pistas lógicas en tiempo real
+    AudioEngine audioEngine;
+
     // Lista principal que almacena las pistas lógicas (sonido/datos)
     std::vector<std::unique_ptr<Track>> tracks;
 
