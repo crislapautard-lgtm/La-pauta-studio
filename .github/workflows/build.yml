@@ -16,9 +16,6 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
-
     - name: Configure CMake
       run: cmake -B build -G "Visual Studio 17 2022" -A x64
 
@@ -36,3 +33,4 @@ jobs:
       with:
         name: La-Pauta-Studio-Installer
         path: LaPautaStudio_Installer.exe
+        
