@@ -15,10 +15,23 @@ public:
     void buttonClicked(juce::Button* button) override;
     void sliderValueChanged(juce::Slider* slider) override;
 
+    // Métodos de estado
+    float getVolume() const { return (float)volumeSlider.getValue(); }
+    float getPan() const { return (float)panSlider.getValue(); }
+    bool isMuted() const { return muteButton.getToggleState(); }
+    bool isSoloed() const { return soloButton.getToggleState(); }
+    bool isRecording() const { return recordButton.getToggleState(); }
+
+    // Funciones callback para automatizaciones y eventos en tiempo real
+    std::function<void(float)> onVolumeChanged;
+    std::function<void(float)> onPanChanged;
+    std::function<bool(bool)> onMuteToggled;
+    std::function<bool(bool)> onSoloToggled;
+    std::function<bool(bool)> onRecordToggled;
+
 private:
     juce::String name;
     
-    // Controles visuales de la pista
     juce::Label titleLabel;
     juce::Slider volumeSlider;
     juce::Slider panSlider;
