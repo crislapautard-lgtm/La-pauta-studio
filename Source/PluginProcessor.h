@@ -34,14 +34,14 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // --- ARREGLO MULTITRACK (4 Pistas + Master) ---
-    static constexpr int numTracks = 4;
+    // --- 16 PISTAS + MASTER ---
+    static constexpr int numTracks = 16;
     
-    std::atomic<float> trackVolume[numTracks] { {0.8f}, {0.8f}, {0.8f}, {0.8f} };
-    std::atomic<float> trackPan[numTracks]    { {0.0f}, {0.0f}, {0.0f}, {0.0f} };
-    std::atomic<bool>  trackMute[numTracks]   { {false}, {false}, {false}, {false} };
-    std::atomic<bool>  trackSolo[numTracks]   { {false}, {false}, {false}, {false} };
-    std::atomic<bool>  trackRec[numTracks]    { {false}, {false}, {false}, {false} };
+    std::atomic<float> trackVolume[numTracks];
+    std::atomic<float> trackPan[numTracks];
+    std::atomic<bool>  trackMute[numTracks];
+    std::atomic<bool>  trackSolo[numTracks];
+    std::atomic<bool>  trackRec[numTracks];
 
     std::atomic<float> masterVolume { 0.9f };
 
