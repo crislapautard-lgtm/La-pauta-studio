@@ -45,6 +45,21 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p) : audioProcessor(p)
     masterTrack.onVolumeChanged = [this](float val) { audioProcessor.masterVolume.store(val); };
     trackContainer.addAndMakeVisible(masterTrack);
 
+    // Control de BPM interactivo en tiempo real
+    bpmSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    bpmSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    bpmSlider.setRange(40.0, 300.0, 1.0);
+    bpmSlider.setValue(audioProcessor.currentBPM.load());
+    bpmSlider.onValueChange = [this] {
+        audioProcessor.setBPM((float)bpmSlider.getValue());
+    };
+    trackContainer.addAndMakeVisible(bpmSlider);
+
+    bpmLabel.setText("TEMPO (BPM)", juce::dontSendNotification);
+    bpmLabel.setJustificationType(juce::Justification::centred);
+    bpmLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+    trackContainer.addAndMakeVisible(bpmLabel);
+
     viewport.setViewedComponent(&trackContainer, false);
     viewport.setScrollBarsShown(true, true);
     addAndMakeVisible(viewport);
@@ -67,7 +82,7 @@ void MainComponent::resized()
     int spacing = 8;
     
     int totalItems = AudioPluginAudioProcessor::numTracks + AudioPluginAudioProcessor::numSubgroups + AudioPluginAudioProcessor::numAuxes + 1;
-    int totalWidth = (totalItems * (trackWidth + spacing)) + 60;
+    int totalWidth = (totalItems * (trackWidth + spacing)) + 120;
 
     trackContainer.setBounds(0, 0, totalWidth, getHeight() - 20);
 
@@ -97,4 +112,8 @@ void MainComponent::resized()
 
     xPos += 20;
     masterTrack.setBounds(xPos, 15, trackWidth, 450);
+
+    xPos += trackWidth + 15;
+    bpmLabel.setBounds(xPos, 20, 90, 20);
+    bpmSlider.setBounds(xPos, 45, 90, 90);
 }
