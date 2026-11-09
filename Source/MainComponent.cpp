@@ -18,11 +18,34 @@ MainComponent::MainComponent()
         trackComponents.push_back(std::move(trackComp));
     }
 
+    // Solicitamos los canales de audio por defecto (2 canales de salida estéreo)
+    setAudioChannels(0, 2);
+
     setSize (1000, 700);
 }
 
 MainComponent::~MainComponent()
 {
+    // Apagamos y liberamos el dispositivo de audio de JUCE al cerrar
+    shutdownAudio();
+}
+
+void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRate)
+{
+    // Aquí puedes inicializar efectos o configuraciones dependientes del sampleRate
+}
+
+void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill)
+{
+    juce::MidiBuffer incomingMidi;
+    
+    // Llamamos a nuestro motor de audio para procesar las pistas lógicas en tiempo real
+    audioEngine.processBlock (*bufferToFill.buffer, incomingMidi, tracks);
+}
+
+void MainComponent::releaseResources()
+{
+    // Limpieza de recursos de audio cuando se detiene la reproducción
 }
 
 void MainComponent::paint (juce::Graphics& g)
