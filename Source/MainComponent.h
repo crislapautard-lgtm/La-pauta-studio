@@ -10,7 +10,7 @@
 #include "ProjectManager.h"
 #include "MixerPanelComponent.h"
 #include "AudioSettingsWindow.h"
-#include "MidiEditorComponent.h" // Incluimos nuestra nueva ventana de Piano Roll
+#include "MidiEditorComponent.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::Button::Listener,
@@ -62,10 +62,14 @@ public:
         toggleMixerButton.setClickingTogglesState(true);
         addAndMakeVisible(toggleMixerButton);
 
-        // --- NUEVO BOTÓN DE PIANO ROLL ---
         midiEditorButton.setButtonText("Piano Roll");
         midiEditorButton.addListener(this);
         addAndMakeVisible(midiEditorButton);
+
+        // --- NUEVO BOTÓN DE EXPORTAR MEZCLA ---
+        exportButton.setButtonText("Exportar");
+        exportButton.addListener(this);
+        addAndMakeVisible(exportButton);
 
         mixerPanel = std::make_unique<MixerPanelComponent>(tracks);
         addChildComponent(mixerPanel.get());
@@ -239,9 +243,10 @@ public:
         openButton.setBounds(getWidth() - 435, 15, 75, 30);
         configButton.setBounds(getWidth() - 520, 15, 75, 30);
         toggleMixerButton.setBounds(getWidth() - 605, 15, 75, 30);
+        midiEditorButton.setBounds(getWidth() - 700, 15, 90, 30);
         
-        // Posicionar el botón de Piano Roll en la barra superior
-        midiEditorButton.setBounds(getWidth() - 705, 15, 90, 30);
+        // Posicionar el botón de Exportar en la barra superior
+        exportButton.setBounds(getWidth() - 785, 15, 80, 30);
 
         int startY = 65;
         int trackHeight = 70;
@@ -316,8 +321,76 @@ public:
             resized();
         }
         else if (button == &midiEditorButton) {
-            // Abrir la ventana flotante del Piano Roll
             midiEditorWindow = std::make_unique<MidiEditorWindow>("Pista MIDI Principal");
+        }
+        else if (button == &exportButton) {
+            // Lógica para exportar la mezcla a un archivo WAV de 24 bits
+            fileChooser = std::make_unique<juce::FileChooser>("Exportar Mezcla a WAV",
+                                                              juce::File::getSpecialLocation(juce::File::userMusicDirectory),
+                                                              "*.wav");
+            fileChooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                [this](const juce::FileChooser& fc) {
+                    auto file = fc.getResult();
+                    if (file != juce::File{}) {
+                        if (file.existsAsFile()) file.deleteFile();
+
+                        juce::WavAudioFormat wavFormat;
+                        auto writer = std::unique_ptr<juce::AudioFormatWriter>(
+                            wavFormat.createWriterFor(new juce::FileOutputStream(file),
+                                                      currentSampleRate, 2, 24, {}, 0)
+                        );
+
+                        if (writer != nullptr) {
+                            // Iniciar reproducción de los tracks para el renderizado
+                            for (auto& track : tracks) {
+                                if (auto* at = dynamic_cast<AudioTrack*>(track.get())) {
+                                    at->startPlayback();
+                                }
+                            }
+
+                            const int numSamplesPerBlock = 512;
+                            double totalSeconds = 20.0; // Duración de exportación de prueba (puedes ajustarla)
+                            int totalBlocks = (int)((totalSeconds * currentSampleRate) / numSamplesPerBlock);
+
+                            for (int b = 0; b < totalBlocks; ++b) {
+                                juce::MidiBuffer dummyMidi;
+                                juce::AudioBuffer<float> mixBus(2, numSamplesPerBlock);
+                                mixBus.clear();
+                                juce::AudioBuffer<float> auxBus(2, numSamplesPerBlock);
+                                auxBus.clear();
+
+                                for (size_t i = 0; i < tracks.size(); ++i) {
+                                    juce::AudioBuffer<float> trackBuffer(2, numSamplesPerBlock);
+                                    trackBuffer.clear();
+                                    tracks[i]->processBlock(trackBuffer, dummyMidi);
+                                    
+                                    if (auto* audioTrack = dynamic_cast<AudioTrack*>(tracks[i].get())) {
+                                        audioTrack->processSendBlock(trackBuffer, auxBus);
+                                    }
+
+                                    for (int ch = 0; ch < 2; ++ch) {
+                                        mixBus.addFrom(ch, 0, trackBuffer, ch, 0, numSamplesPerBlock);
+                                    }
+                                }
+
+                                auxBus.applyGain(0.7f);
+                                for (int ch = 0; ch < 2; ++ch) {
+                                    mixBus.addFrom(ch, 0, auxBus, ch, 0, numSamplesPerBlock);
+                                }
+
+                                mixBus.applyGain(0.9f);
+                                writer->writeFromAudioSampleBuffer(mixBus, 0, numSamplesPerBlock);
+                            }
+
+                            // Detener tracks tras finalizar el render
+                            for (auto& track : tracks) {
+                                if (auto* at = dynamic_cast<AudioTrack*>(track.get())) {
+                                    at->stopPlayback();
+                                }
+                            }
+                        }
+                    }
+                });
         }
     }
 
@@ -336,7 +409,8 @@ private:
     juce::TextButton openButton;
     juce::TextButton configButton;
     juce::TextButton toggleMixerButton;
-    juce::TextButton midiEditorButton; // Botón para abrir el Piano Roll
+    juce::TextButton midiEditorButton;
+    juce::TextButton exportButton; // Botón para exportar a WAV
 
     std::unique_ptr<MixerPanelComponent> mixerPanel;
     bool showMixer = false;
@@ -348,7 +422,7 @@ private:
     bool playClickSample = false;
 
     std::unique_ptr<AudioSettingsWindow> settingsWindow;
-    std::unique_ptr<MidiEditorWindow> midiEditorWindow; // Instancia de la ventana de Piano Roll
+    std::unique_ptr<MidiEditorWindow> midiEditorWindow;
     juce::UndoManager undoManager;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
