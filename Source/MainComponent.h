@@ -209,7 +209,7 @@ public:
         mixBus.applyGain(0.9f);
 
         for (int ch = 0; ch < bufferToFill.buffer->getNumChannels(); ++ch) {
-            bufferToFill.buffer->copyFrom(ch, bufferToFill.buffer->getStartSample(), mixBus, ch, 0, bufferToFill.numSamples);
+            bufferToFill.buffer->copyFrom(ch, 0, mixBus, ch, 0, bufferToFill.numSamples);
         }
     }
 
@@ -331,9 +331,13 @@ public:
                         if (file.existsAsFile()) file.deleteFile();
 
                         juce::WavAudioFormat wavFormat;
+                        juce::AudioFormatWriterOptions options;
+                        options.bitsPerSample = 24;
+                        options.sampleRate = currentSampleRate;
+                        options.numChannels = 2;
+
                         auto writer = std::unique_ptr<juce::AudioFormatWriter>(
-                            wavFormat.createWriterFor(new juce::FileOutputStream(file),
-                                                      currentSampleRate, 2, 24, {}, 0)
+                            wavFormat.createWriterFor(std::make_unique<juce::FileOutputStream>(file), options)
                         );
 
                         if (writer != nullptr) {
