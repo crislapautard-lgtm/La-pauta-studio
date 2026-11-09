@@ -19,10 +19,12 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
         trackMute[i].store(false);
         trackSolo[i].store(false);
         trackRec[i].store(false);
-        trackSubgroupAssign[i].store(-1); // Por defecto van directo al Master
+        trackSubgroupAssign[i].store(-1);
 
         for (int a = 0; a < numAuxes; ++a)
             trackSend[i][a].store(0.0f);
+
+        recorders[i] = std::make_unique<TrackRecorder>();
     }
 
     for (int s = 0; s < numSubgroups; ++s)
@@ -32,7 +34,12 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
         auxVolume[a].store(0.7f);
 }
 
-AudioPluginAudioProcessor::~AudioPluginAudioProcessor() {}
+AudioPluginAudioProcessor::~AudioPluginAudioProcessor()
+{
+    for (int i = 0; i < numTracks; ++i) {
+        stopRecordingTrack(i);
+    }
+}
 
 const juce::String AudioPluginAudioProcessor::getName() const { return JucePlugin_Name; }
 bool AudioPluginAudioProcessor::acceptsMidi() const { return false; }
@@ -44,7 +51,11 @@ void AudioPluginAudioProcessor::setCurrentProgram (int index) override {}
 const juce::String AudioPluginAudioProcessor::getProgramName (int index) override { return {}; }
 void AudioPluginAudioProcessor::changeProgramName (int index, const juce::String& newName) {}
 
-void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock) {}
+void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    currentSampleRate = sampleRate;
+}
+
 void AudioPluginAudioProcessor::releaseResources() {}
 
 #ifndef JucePlugin_PreferredChannelConfigurations
@@ -56,6 +67,60 @@ bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layou
     return true;
 }
 #endif
+
+void AudioPluginAudioProcessor::setTrackRecording(int trackIndex, bool shouldRecord)
+{
+    if (trackIndex < 0 || trackIndex >= numTracks) return;
+
+    bool currentlyRec = trackRec[trackIndex].load();
+    if (shouldRecord != currentlyRec) {
+        trackRec[trackIndex].store(shouldRecord);
+        if (shouldRecord) {
+            startRecordingTrack(trackIndex);
+        } else {
+            stopRecordingTrack(trackIndex);
+        }
+    }
+}
+
+void AudioPluginAudioProcessor::startRecordingTrack(int trackIndex)
+{
+    auto& rec = recorders[trackIndex];
+    if (rec->isRecording.load()) return;
+
+    auto dir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                   .getChildFile("LaPautaStudio_Recordings");
+    dir.createDirectory();
+
+    auto file = dir.getChildFile("Vocal_" + juce::String(trackIndex + 1) + "_" + juce::Time::getCurrentTime().formatted("%Y%m%d_%H%M%S") + ".wav");
+    file.deleteFile();
+
+    rec->backgroundThread.startThread();
+
+    auto* outputStream = file.createOutputStream();
+    if (outputStream != nullptr)
+    {
+        ju::WavAudioFormat wavFormat;
+        auto* writer = wavFormat.createWriterFor(outputStream, currentSampleRate, 2, 16, {}, 0);
+        if (writer != nullptr)
+        {
+            rec->writer.reset(writer);
+            rec->isRecording.store(true);
+        }
+    }
+}
+
+void AudioPluginAudioProcessor::stopRecordingTrack(int trackIndex)
+{
+    auto& rec = recorders[trackIndex];
+    if (!rec->isRecording.load()) return;
+
+    rec->isRecording.store(false);
+    rec->backgroundThread.stopThread(2000);
+
+    const juce::ScopedLock locker(juce::CriticalSection{});
+    rec->writer.reset();
+}
 
 void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
@@ -73,7 +138,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
 
         int numSamples = buffer.getNumSamples();
 
-        // Buffers temporales para Subgrupos y Auxiliares en el DSP
         std::vector<float> subL(numSubgroups * numSamples, 0.0f);
         std::vector<float> subR(numSubgroups * numSamples, 0.0f);
         std::vector<float> auxL(numAuxes * numSamples, 0.0f);
@@ -82,9 +146,16 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
         std::vector<float> masterAccumL(numSamples, 0.0f);
         std::vector<float> masterAccumR(numSamples, 0.0f);
 
-        // 1. Procesar cada pista individual
         for (int t = 0; t < numTracks; ++t)
         {
+            if (recorders[t]->isRecording.load() && recorders[t]->writer != nullptr)
+            {
+                juce::AudioBuffer<float> tempBuf(2, numSamples);
+                tempBuf.copyFrom(0, 0, buffer, 0, 0, numSamples);
+                tempBuf.copyFrom(1, 0, buffer, 1, 0, numSamples);
+                recorders[t]->writer->writeFromAudioSampleBuffer(tempBuf, 0, numSamples);
+            }
+
             if (trackMute[t].load()) continue;
 
             float vol = trackVolume[t].load();
@@ -101,7 +172,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
                 float processedL = left[i] * lGain;
                 float processedR = right[i] * rGain;
 
-                // Envíos a Auxiliares (Sends)
                 if (sendA > 0.0f) {
                     auxL[0 * numSamples + i] += processedL * sendA;
                     auxR[0 * numSamples + i] += processedR * sendA;
@@ -111,7 +181,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
                     auxR[1 * numSamples + i] += processedR * sendB;
                 }
 
-                // Ruteo a Subgrupo o Master directo
                 if (subGroup >= 0 && subGroup < numSubgroups) {
                     subL[subGroup * numSamples + i] += processedL;
                     subR[subGroup * numSamples + i] += processedR;
@@ -122,7 +191,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
             }
         }
 
-        // 2. Sumar Subgrupos al Master aplicando su volumen
         for (int s = 0; s < numSubgroups; ++s) {
             float sVol = subgroupVolume[s].load();
             for (int i = 0; i < numSamples; ++i) {
@@ -131,7 +199,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
             }
         }
 
-        // 3. Sumar Auxiliares al Master aplicando su volumen (Efecto en paralelo)
         for (int a = 0; a < numAuxes; ++a) {
             float aVol = auxVolume[a].load();
             for (int i = 0; i < numSamples; ++i) {
@@ -140,7 +207,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
             }
         }
 
-        // 4. Aplicar Volumen Master Final
         float masterVol = masterVolume.load();
         for (int i = 0; i < numSamples; ++i) {
             left[i]  = masterAccumL[i] * masterVol;
