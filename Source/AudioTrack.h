@@ -65,11 +65,7 @@ public:
     }
 
     void loadPlugin(const juce::File& file) {
-#JUCE_BEGIN_IGNORE_WARNINGS_MSVC(4996)
-        juce::KnownPluginList pluginList;
         juce::VST3PluginFormat vst3Format;
-#JUCE_END_IGNORE_WARNINGS_MSVC
-
         juce::PluginDescription description;
         description.fileOrIdentifier = file.getFullPathName();
         description.pluginFormatName = "VST3";
@@ -84,9 +80,7 @@ public:
 
     void openPluginEditor() {
         if (activePlugin != nullptr && activePlugin->hasEditor()) {
-            if (auto* editor = activePlugin->createEditorCustom()) { // Safe editor creation fallback
-                pluginEditorWindow = std::make_unique<PluginWindow>(editor, name);
-            } else if (auto* editor = activePlugin->createEditor()) {
+            if (auto* editor = activePlugin->createEditor()) {
                 pluginEditorWindow = std::make_unique<PluginWindow>(editor, name);
             }
         }
