@@ -84,7 +84,8 @@ void TrackComponent::buttonClicked(juce::Button* button)
     }
     else if (button == &recordButton) {
         bool state = recordButton.getToggleState();
-        recordButton.setColour(juce::TextButton::buttonColourId, state ? juce::Colours::brightgreen : juce::Colours::maroon);
+        // Corregido: Usamos recordButton y un color válido de JUCE (green)
+        recordButton.setColour(juce::TextButton::buttonColourId, state ? juce::Colours::green : juce::Colours::maroon);
         if (onRecordToggled) onRecordToggled(state);
     }
 }
