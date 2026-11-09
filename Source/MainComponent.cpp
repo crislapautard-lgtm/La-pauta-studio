@@ -1,86 +1,759 @@
+
 #include "MainComponent.h"
+
+// ============================================================
+// LA PAUTA STUDIO
+// MainComponent.cpp - Correccion de compilacion
+// JUCE / C++
+// ============================================================
+
 MainComponent::MainComponent()
 {
-    setSize(1280, 760); setAudioChannels(2, 2); formatManager.registerBasicFormats(); pluginManager.addDefaultFormats(); startTimer(50);
-    juce::Colour cols[4] = { juce::Colours::red, juce::Colours::orange, juce::Colours::green, juce::Colours::skyblue };
-    for(int i=0;i<4;++i){ Track t; t.name="Pista "+juce::String(i+1); t.color=cols[i]; tracks.add(t); }
-    addAndMakeVisible(titleLabel); titleLabel.setText("LA PAUTA STUDIO - TODO REAPER", juce::dontSendNotification); titleLabel.setFont(juce::Font(22.0f, juce::Font::bold)); titleLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(playButton); playButton.setButtonText("▶ PLAY"); addAndMakeVisible(stopButton); stopButton.setButtonText("■ STOP"); addAndMakeVisible(recButton); recButton.setButtonText("🔴 REC");
-    addAndMakeVisible(loadSampleButton); loadSampleButton.setButtonText("CARGAR SAMPLE"); addAndMakeVisible(renderButton); renderButton.setButtonText("RENDER WAV");
-    addAndMakeVisible(scanButton); scanButton.setButtonText("SCAN VST3 + JSFX"); addAndMakeVisible(vstButton); vstButton.setButtonText("🎛 ABRIR VST");
-    addAndMakeVisible(saveButton); saveButton.setButtonText("GUARDAR"); addAndMakeVisible(loadButton); loadButton.setButtonText("ABRIR PROYECTO");
-    addAndMakeVisible(addTrackButton); addTrackButton.setButtonText("+ PISTA"); addAndMakeVisible(metronomeButton); metronomeButton.setButtonText("METRONOMO");
-    addAndMakeVisible(beatButton); beatButton.setButtonText("BEAT MAKER"); addAndMakeVisible(mixerButton); mixerButton.setButtonText("MIXER");
-    addAndMakeVisible(audioSettingsButton); audioSettingsButton.setButtonText("⚙️ AUDIO / ASIO"); addAndMakeVisible(pianoButton); pianoButton.setButtonText("🎹 PIANO ROLL");
-    addAndMakeVisible(cutButton); cutButton.setButtonText("✂️ CORTAR"); addAndMakeVisible(muteButton); muteButton.setButtonText("MUTE"); addAndMakeVisible(soloButton); soloButton.setButtonText("SOLO");
-    playButton.onClick=[this]{play();}; stopButton.onClick=[this]{stop();}; recButton.onClick=[this]{toggleRec();}; loadSampleButton.onClick=[this]{loadSample();}; renderButton.onClick=[this]{renderMix();};
-    scanButton.onClick=[this]{scanVST3();}; vstButton.onClick=[this]{openVST();}; saveButton.onClick=[this]{saveProject();}; loadButton.onClick=[this]{loadProject();};
-    addTrackButton.onClick=[this]{addTrack();}; metronomeButton.onClick=[this]{toggleMetronome();}; beatButton.onClick=[this]{openBeatMaker();}; mixerButton.onClick=[this]{openMixer();}; audioSettingsButton.onClick=[this]{openAudioSettings();}; pianoButton.onClick=[this]{openPianoRoll();};
-    cutButton.onClick=[this]{ if(selectedTrack>=0 && tracks[selectedTrack].hasAudio){ auto &b=tracks.getReference(selectedTrack).buffer; b.setSize(b.getNumChannels(), b.getNumSamples()/2); statusLabel.setText("✂️ Cortado", juce::dontSendNotification); } };
-    muteButton.onClick=[this]{ if(selectedTrack>=0){ auto &t=tracks.getReference(selectedTrack); t.muted=!t.muted; statusLabel.setText(t.name+(t.muted?" MUTED":" SONANDO"), juce::dontSendNotification); } };
-    soloButton.onClick=[this]{ if(selectedTrack>=0){ for(auto &t: tracks) t.muted=true; tracks.getReference(selectedTrack).muted=false; statusLabel.setText("SOLO en "+tracks[selectedTrack].name, juce::dontSendNotification); } };
-    addAndMakeVisible(statusLabel); statusLabel.setText("Listo. Todo Reaper: graba, edita, VST3 + JSFX, MIDI, FX, ASIO.", juce::dontSendNotification); statusLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(bpmLabel); bpmLabel.setText("BPM", juce::dontSendNotification); bpmLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(bpmSlider); bpmSlider.setRange(60,200,1); bpmSlider.setValue(95); bpmSlider.onValueChange=[this]{bpm=(int)bpmSlider.getValue();};
-    addAndMakeVisible(masterSlider); masterSlider.setRange(0,1,0.01); masterSlider.setValue(0.8);
-    addAndMakeVisible(trackSelector); for(int i=0;i<tracks.size();++i) trackSelector.addItem(tracks[i].name, i+1); trackSelector.setSelectedId(1); trackSelector.onChange=[this]{selectedTrack=trackSelector.getSelectedId()-1;};
-    addAndMakeVisible(eqLabel); eqLabel.setText("EQ", juce::dontSendNotification); eqLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(eqLowSlider); eqLowSlider.setRange(-12,12,0.1); eqLowSlider.setValue(0); eqLowSlider.onValueChange=[this]{eqLow=(float)eqLowSlider.getValue();};
-    addAndMakeVisible(eqMidSlider); eqMidSlider.setRange(-12,12,0.1); eqMidSlider.setValue(0); eqMidSlider.onValueChange=[this]{eqMid=(float)eqMidSlider.getValue();};
-    addAndMakeVisible(eqHighSlider); eqHighSlider.setRange(-12,12,0.1); eqHighSlider.setValue(0); eqHighSlider.onValueChange=[this]{eqHigh=(float)eqHighSlider.getValue();};
-    addAndMakeVisible(fxLabel); fxLabel.setText("FX: REV / DLY / COMP", juce::dontSendNotification); fxLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(reverbSlider); reverbSlider.setRange(0,1,0.01); reverbSlider.setValue(0); reverbSlider.onValueChange=[this]{ if(selectedTrack>=0) tracks.getReference(selectedTrack).reverb=(float)reverbSlider.getValue(); };
-    addAndMakeVisible(delaySlider); delaySlider.setRange(0,1,0.01); delaySlider.setValue(0); delaySlider.onValueChange=[this]{ if(selectedTrack>=0) tracks.getReference(selectedTrack).delay=(float)delaySlider.getValue(); };
-    addAndMakeVisible(compSlider); compSlider.setRange(0,1,0.01); compSlider.setValue(0); compSlider.onValueChange=[this]{ if(selectedTrack>=0) tracks.getReference(selectedTrack).comp=(float)compSlider.getValue(); };
-    addAndMakeVisible(autoLabel); autoLabel.setText("AUTO VOL / PAN / VOL PISTA", juce::dontSendNotification); autoLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    addAndMakeVisible(autoSlider); autoSlider.setRange(0,1,0.01); autoSlider.setValue(1); autoSlider.onValueChange=[this]{ if(selectedTrack>=0) tracks.getReference(selectedTrack).autoVol=(float)autoSlider.getValue(); };
-    addAndMakeVisible(volSlider); volSlider.setRange(0,1,0.01); volSlider.setValue(0.8); volSlider.onValueChange=[this]{ if(selectedTrack>=0) tracks.getReference(selectedTrack).volume=(float)volSlider.getValue(); };
-    addAndMakeVisible(panSlider); panSlider.setRange(-1,1,0.01); panSlider.setValue(0); panSlider.onValueChange=[this]{ if(selectedTrack>=0) tracks.getReference(selectedTrack).pan=(float)panSlider.getValue(); };
-}
-MainComponent::~MainComponent(){ shutdownAudio(); stopTimer(); }
-void MainComponent::timerCallback(){ repaint(); }
-void MainComponent::play(){ isPlaying=true; for(auto &t: tracks) t.pos=0; playhead=0; }
-void MainComponent::stop(){ isPlaying=false; }
-void MainComponent::addTrack(){ Track t; t.name="Pista "+juce::String(tracks.size()+1); t.color=juce::Colours::purple; tracks.add(t); trackSelector.addItem(t.name, tracks.size()); }
-void MainComponent::toggleMetronome(){ metronomeOn=!metronomeOn; }
-void MainComponent::openBeatMaker(){ juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,"BEAT MAKER","DEMBOW: Kick-Kick-Snare\nTRAP: 808 + HiHat\nDRILL: 808 deslizado + Snare","DALE"); }
-void MainComponent::openMixer(){ juce::String m; for(auto &t: tracks) m+=t.name+" Vol "+juce::String((int)(t.volume*100))+"% Pan "+juce::String((int)(t.pan*100))+" REV "+juce::String((int)(t.reverb*100))+"% "+(t.muted?"MUTE":"ON")+"\n"; juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,"MIXER COMPLETO",m,"OK"); }
-void MainComponent::openAudioSettings(){ auto* s=new juce::AudioDeviceSelectorComponent(deviceManager,0,2,0,2,false,false,true,false); s->setSize(600,500); juce::DialogWindow::LaunchOptions o; o.content.setOwned(s); o.dialogTitle="AUDIO / ASIO - Tarjeta, Buffer, Sample Rate"; o.escapeKeyTriggersCloseButton=true; o.useNativeTitleBar=true; o.resizable=true; o.launchAsync(); }
-void MainComponent::openPianoRoll(){ juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,"PIANO ROLL","Piano Roll listo. Notas MIDI: "+juce::String(midiNotes.size()),"TOCAR"); MidiNote n; n.note=60+ (int)(midiNotes.size()%12); n.start=playhead; midiNotes.add(n); }
-void MainComponent::mouseDown(const juce::MouseEvent& e){ int y=170; for(int i=0;i<tracks.size();++i){ if(e.y>=y && e.y<y+60){ selectedTrack=i; trackSelector.setSelectedId(i+1); dragStartX=e.x; dragTrack=i; break; } y+=65; } }
-void MainComponent::mouseDrag(const juce::MouseEvent& e){ if(dragTrack>=0){ tracks.getReference(dragTrack).clipOffset += (e.x-dragStartX)/10; dragStartX=e.x; } }
-void MainComponent::toggleRec(){ if(!isRecording){ auto d=juce::File::getSpecialLocation(juce::File::userDocumentsDirectory); juce::File f=d.getChildFile("LaPauta_Voz.wav"); if(f.exists()) f.deleteFile(); juce::WavAudioFormat wav; if(auto s=f.createOutputStream()){ writer.reset(wav.createWriterFor(s.release(), sampleRate, 2, 16, {}, 0)); isRecording=true; isPlaying=false; recButton.setButtonText("⏹ PARAR"); statusLabel.setText("🔴 GRABANDO en "+tracks[selectedTrack].name, juce::dontSendNotification); } } else { isRecording=false; writer.reset(); recButton.setButtonText("🔴 REC"); loadFileIntoBuffer(juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("LaPauta_Voz.wav"), selectedTrack); statusLabel.setText("Voz guardada - Dale PLAY", juce::dontSendNotification); } }
-void MainComponent::loadSample(){ fileChooser=std::make_unique<juce::FileChooser>("Elige sample", juce::File::getSpecialLocation(juce::File::userDocumentsDirectory), "*.wav;*.mp3;*.aif;*.flac"); fileChooser->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,[this](const juce::FileChooser& fc){ auto file=fc.getResult(); if(file.exists()){ currentSampleFile=file; loadFileIntoBuffer(file, selectedTrack); statusLabel.setText("Sample en "+tracks[selectedTrack].name, juce::dontSendNotification);} }); }
-void MainComponent::loadFileIntoBuffer(juce::File file, int idx){ if(idx<0||idx>=tracks.size()) return; if(auto* r=formatManager.createReaderFor(file)){ tracks.getReference(idx).buffer.setSize((int)r->numChannels,(int)r->lengthInSamples); r->read(&tracks.getReference(idx).buffer,0,(int)r->lengthInSamples,0,true,true); tracks.getReference(idx).hasAudio=true; tracks.getReference(idx).pos=0; delete r; } }
-void MainComponent::scanVST3(){
-    foundPlugins.clear(); pluginDescs.clear(); foundJSFX.clear();
-    juce::KnownPluginList list;
-    juce::FileSearchPath vst3Path("C:\\Program Files\\Common Files\\VST3;C:\\Program Files\\VSTPlugins");
-    // ARREGLO JUCE 8: scanner necesita AudioPluginFormat&, no el manager entero
-    for(auto* fmt : pluginManager.getFormats()){
-        juce::PluginDirectoryScanner scanner(list, *fmt, vst3Path, true, juce::File());
-        juce::String pluginBeingScanned;
-        while(scanner.scanNextFile(true, pluginBeingScanned)) {}
+    setSize(1280, 760);
+    setAudioChannels(2, 2);
+
+    formatManager.registerBasicFormats();
+    pluginManager.addDefaultFormats();
+
+    startTimer(50);
+
+    juce::Colour cols[4] = {
+        juce::Colours::red,
+        juce::Colours::orange,
+        juce::Colours::green,
+        juce::Colours::skyblue
+    };
+
+    for (int i = 0; i < 4; ++i)
+    {
+        Track t;
+        t.name = "Pista " + juce::String(i + 1);
+        t.color = cols[i];
+        tracks.add(t);
     }
-    for(int i=0;i<list.getNumTypes();++i){ auto* desc=list.getType(i); if(desc!=nullptr){ pluginDescs.add(*desc); foundPlugins.add(desc->name); } }
-    juce::StringArray jsfxFolders;
-    jsfxFolders.add("C:\\Program Files\\REAPER\\Effects");
-    jsfxFolders.add(juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("REAPER\\Effects").getFullPathName());
-    jsfxFolders.add(juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("REAPER\\Effects").getFullPathName());
-    for(auto &f : jsfxFolders){ juce::File folder(f); if(folder.exists()){ auto files=folder.findChildFiles(juce::File::findFiles, true, "*.jsfx"); for(auto &file : files) foundJSFX.add(file.getFileNameWithoutExtension()); } }
-    juce::String r = "✅ VST3: " + juce::String(foundPlugins.size()) + " encontrados\n";
-    for(auto &n: foundPlugins) r += "  - " + n + "\n";
-    r += "\n✅ JSFX: " + juce::String(foundJSFX.size()) + " encontrados\n";
-    for(auto &n: foundJSFX) r += "  - " + n + "\n";
-    if(foundJSFX.isEmpty()) r += "\n( Si no tienes REAPER instalado, copia tus .jsfx en Documentos / REAPER / Effects )";
-    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,"SCAN COMPLETO - VST3 + JSFX",r,"DALE");
+
+    // TITULO
+    addAndMakeVisible(titleLabel);
+    titleLabel.setText("LA PAUTA STUDIO - TODO REAPER",
+                       juce::dontSendNotification);
+    titleLabel.setFont(juce::Font(22.0f, juce::Font::bold));
+    titleLabel.setColour(juce::Label::textColourId,
+                         juce::Colours::white);
+
+    // BOTONES PRINCIPALES
+    addAndMakeVisible(playButton);
+    playButton.setButtonText("PLAY");
+
+    addAndMakeVisible(stopButton);
+    stopButton.setButtonText("STOP");
+
+    addAndMakeVisible(recButton);
+    recButton.setButtonText("REC");
+
+    addAndMakeVisible(loadSampleButton);
+    loadSampleButton.setButtonText("CARGAR SAMPLE");
+
+    addAndMakeVisible(renderButton);
+    renderButton.setButtonText("RENDER WAV");
+
+    addAndMakeVisible(scanButton);
+    scanButton.setButtonText("SCAN VST3 + JSFX");
+
+    addAndMakeVisible(vstButton);
+    vstButton.setButtonText("ABRIR VST");
+
+    addAndMakeVisible(saveButton);
+    saveButton.setButtonText("GUARDAR");
+
+    addAndMakeVisible(loadButton);
+    loadButton.setButtonText("ABRIR PROYECTO");
+
+    addAndMakeVisible(addTrackButton);
+    addTrackButton.setButtonText("+ PISTA");
+
+    addAndMakeVisible(metronomeButton);
+    metronomeButton.setButtonText("METRONOMO");
+
+    addAndMakeVisible(beatButton);
+    beatButton.setButtonText("BEAT MAKER");
+
+    addAndMakeVisible(mixerButton);
+    mixerButton.setButtonText("MIXER");
+
+    addAndMakeVisible(audioSettingsButton);
+    audioSettingsButton.setButtonText("AUDIO / ASIO");
+
+    addAndMakeVisible(pianoButton);
+    pianoButton.setButtonText("PIANO ROLL");
+
+    addAndMakeVisible(cutButton);
+    cutButton.setButtonText("CORTAR");
+
+    addAndMakeVisible(muteButton);
+    muteButton.setButtonText("MUTE");
+
+    addAndMakeVisible(soloButton);
+    soloButton.setButtonText("SOLO");
+
+    // ACCIONES
+    playButton.onClick = [this] { play(); };
+    stopButton.onClick = [this] { stop(); };
+    recButton.onClick = [this] { toggleRec(); };
+    loadSampleButton.onClick = [this] { loadSample(); };
+    renderButton.onClick = [this] { renderMix(); };
+
+    scanButton.onClick = [this] { scanVST3(); };
+    vstButton.onClick = [this] { openVST(); };
+
+    saveButton.onClick = [this] { saveProject(); };
+    loadButton.onClick = [this] { loadProject(); };
+
+    addTrackButton.onClick = [this] { addTrack(); };
+    metronomeButton.onClick = [this] { toggleMetronome(); };
+
+    beatButton.onClick = [this] { openBeatMaker(); };
+    mixerButton.onClick = [this] { openMixer(); };
+    audioSettingsButton.onClick = [this] { openAudioSettings(); };
+    pianoButton.onClick = [this] { openPianoRoll(); };
+
+    cutButton.onClick = [this]
+    {
+        if (selectedTrack >= 0 && selectedTrack < tracks.size())
+        {
+            auto& b = tracks.getReference(selectedTrack).buffer;
+
+            if (b.getNumSamples() > 0)
+            {
+                b.setSize(b.getNumChannels(),
+                         b.getNumSamples() / 2);
+
+                statusLabel.setText("Cortado",
+                                    juce::dontSendNotification);
+            }
+        }
+    };
+
+    muteButton.onClick = [this]
+    {
+        if (selectedTrack >= 0 && selectedTrack < tracks.size())
+        {
+            auto& t = tracks.getReference(selectedTrack);
+            t.muted = !t.muted;
+
+            statusLabel.setText(
+                t.name + (t.muted ? " MUTED" : " SONANDO"),
+                juce::dontSendNotification);
+        }
+    };
+
+    soloButton.onClick = [this]
+    {
+        if (selectedTrack >= 0 && selectedTrack < tracks.size())
+        {
+            for (auto& t : tracks)
+                t.muted = true;
+
+            tracks.getReference(selectedTrack).muted = false;
+
+            statusLabel.setText(
+                "SOLO en " + tracks[selectedTrack].name,
+                juce::dontSendNotification);
+        }
+    };
+
+    // ESTADO
+    addAndMakeVisible(statusLabel);
+    statusLabel.setText("LA PAUTA STUDIO - Listo",
+                        juce::dontSendNotification);
+    statusLabel.setColour(juce::Label::textColourId,
+                          juce::Colours::white);
+
+    // BPM
+    addAndMakeVisible(bpmLabel);
+    bpmLabel.setText("BPM", juce::dontSendNotification);
+    bpmLabel.setColour(juce::Label::textColourId,
+                       juce::Colours::white);
+
+    addAndMakeVisible(bpmSlider);
+    bpmSlider.setRange(60, 200, 1);
+    bpmSlider.setValue(95);
+
+    bpmSlider.onValueChange = [this]
+    {
+        bpm = (int)bpmSlider.getValue();
+    };
+
+    // MASTER
+    addAndMakeVisible(masterSlider);
+    masterSlider.setRange(0, 1, 0.01);
+    masterSlider.setValue(0.8);
+
+    // SELECTOR DE PISTAS
+    addAndMakeVisible(trackSelector);
+
+    for (int i = 0; i < tracks.size(); ++i)
+        trackSelector.addItem(tracks[i].name, i + 1);
+
+    trackSelector.setSelectedId(1);
+
+    trackSelector.onChange = [this]
+    {
+        selectedTrack = trackSelector.getSelectedId() - 1;
+    };
+
+    // EQ
+    addAndMakeVisible(eqLabel);
+    eqLabel.setText("EQ", juce::dontSendNotification);
+    eqLabel.setColour(juce::Label::textColourId,
+                      juce::Colours::white);
+
+    addAndMakeVisible(eqLowSlider);
+    eqLowSlider.setRange(-12, 12, 0.1);
+    eqLowSlider.setValue(0);
+    eqLowSlider.onValueChange = [this]
+    {
+        eqLow = (float)eqLowSlider.getValue();
+    };
+
+    addAndMakeVisible(eqMidSlider);
+    eqMidSlider.setRange(-12, 12, 0.1);
+    eqMidSlider.setValue(0);
+    eqMidSlider.onValueChange = [this]
+    {
+        eqMid = (float)eqMidSlider.getValue();
+    };
+
+    addAndMakeVisible(eqHighSlider);
+    eqHighSlider.setRange(-12, 12, 0.1);
+    eqHighSlider.setValue(0);
+    eqHighSlider.onValueChange = [this]
+    {
+        eqHigh = (float)eqHighSlider.getValue();
+    };
+
+    // EFECTOS
+    addAndMakeVisible(fxLabel);
+    fxLabel.setText("FX: REV / DLY / COMP",
+                    juce::dontSendNotification);
+    fxLabel.setColour(juce::Label::textColourId,
+                      juce::Colours::white);
+
+    addAndMakeVisible(reverbSlider);
+    reverbSlider.setRange(0, 1, 0.01);
+    reverbSlider.setValue(0);
+
+    reverbSlider.onValueChange = [this]
+    {
+        if (selectedTrack >= 0 && selectedTrack < tracks.size())
+            tracks.getReference(selectedTrack).reverb =
+                (float)reverbSlider.getValue();
+    };
+
+    addAndMakeVisible(delaySlider);
+    delaySlider.setRange(0, 1, 0.01);
+    delaySlider.setValue(0);
+
+    delaySlider.onValueChange = [this]
+    {
+        if (selectedTrack >= 0 && selectedTrack < tracks.size())
+            tracks.getReference(selectedTrack).delay =
+                (float)delaySlider.getValue();
+    };
+
+    addAndMakeVisible(compSlider);
+    compSlider.setRange(0, 1, 0.01);
+    compSlider.setValue(0);
+
+    compSlider.onValueChange = [this]
+    {
+        if (selectedTrack >= 0 && selectedTrack < tracks.size())
+            tracks.getReference(selectedTrack).comp =
+                (float)compSlider.getValue();
+    };
+
+    // AUTOMATIZACION Y VOLUMEN
+    addAndMakeVisible(autoLabel);
+    autoLabel.setText("AUTO VOL / PAN / VOL PISTA",
+                      juce::dontSendNotification);
+    autoLabel.setColour(juce::Label::textColourId,
+                        juce::Colours::white);
+
+    addAndMakeVisible(autoSlider);
+    autoSlider.setRange(0, 1, 0.01);
+    autoSlider.setValue(1);
+
+    autoSlider.onValueChange = [this]
+    {
+        if (selectedTrack >= 0 && selectedTrack < tracks.size())
+            tracks.getReference(selectedTrack).autoVol =
+                (float)autoSlider.getValue();
+    };
+
+    addAndMakeVisible(volSlider);
+    volSlider.setRange(0, 1, 0.01);
+    volSlider.setValue(0.8);
+
+    volSlider.onValueChange = [this]
+    {
+        if (selectedTrack >= 0 && selectedTrack < tracks.size())
+            tracks.getReference(selectedTrack).volume =
+                (float)volSlider.getValue();
+    };
+
+    addAndMakeVisible(panSlider);
+    panSlider.setRange(-1, 1, 0.01);
+    panSlider.setValue(0);
+
+    panSlider.onValueChange = [this]
+    {
+        if (selectedTrack >= 0 && selectedTrack < tracks.size())
+            tracks.getReference(selectedTrack).pan =
+                (float)panSlider.getValue();
+    };
 }
-void MainComponent::openVST(){ if(pluginDescs.isEmpty()){ juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,"VST","Dale SCAN VST3 + JSFX primero","OK"); return; } juce::String err; for(auto &desc: pluginDescs){ if(auto inst=pluginManager.createPluginInstance(desc, sampleRate, 512, err)){ pluginInstance.reset(inst.release()); pluginInstance->prepareToPlay(sampleRate, 512); if(pluginInstance->hasEditor()){ pluginEditor.reset(pluginInstance->createEditor()); juce::DialogWindow::LaunchOptions o; o.content.setOwned(pluginEditor.release()); o.dialogTitle="VST: "+desc.name; o.escapeKeyTriggersCloseButton=true; o.useNativeTitleBar=true; o.resizable=true; o.launchAsync(); } statusLabel.setText("VST abierto: "+desc.name, juce::dontSendNotification); return; } } statusLabel.setText("No se pudo abrir VST: "+err, juce::dontSendNotification); }
-void MainComponent::applyFX(juce::AudioBuffer<float>& buf, Track& t){ if(t.reverb>0.01f){ for(int ch=0;ch<buf.getNumChannels();++ch){ auto* d=buf.getWritePointer(ch); int ds=(int)(sampleRate*0.12f); for(int i=ds;i<buf.getNumSamples();++i) d[i]+=d[i-ds]*t.reverb*0.4f; } } if(t.delay>0.01f){ for(int ch=0;ch<buf.getNumChannels();++ch){ auto* d=buf.getWritePointer(ch); int ds=(int)(sampleRate*0.3f); for(int i=ds;i<buf.getNumSamples();++i) d[i]+=d[i-ds]*t.delay*0.5f; } } if(t.comp>0.01f) buf.applyGain(1.0f - t.comp*0.3f); buf.applyGain(t.autoVol); }
-void MainComponent::renderMix(){ auto docs=juce::File::getSpecialLocation(juce::File::userDocumentsDirectory); juce::File out=docs.getChildFile("LaPauta_Mix_Final.wav"); juce::WavAudioFormat wav; if(auto s=out.createOutputStream()){ if(auto* w=wav.createWriterFor(s.release(), sampleRate, 2, 16, {}, 0)){ int total=0; for(auto &t: tracks) total=juce::jmax(total, t.buffer.getNumSamples()); juce::AudioSampleBuffer mix(2,total); mix.clear(); for(auto &t: tracks){ if(!t.hasAudio||t.muted) continue; for(int ch=0;ch<2;++ch){ int src=juce::jmin(ch, t.buffer.getNumChannels()-1); mix.addFrom(ch,0,t.buffer,src,0,total,t.volume*t.autoVol); } } w->writeFromAudioSampleBuffer(mix,0,total); delete w; } } juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,"RENDER","Listo! Documentos / LaPauta_Mix_Final.wav","CORONAMOS"); }
-void MainComponent::saveProject(){ fileChooser=std::make_unique<juce::FileChooser>("Guardar", juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("MiTema.lapauta"), "*.lapauta"); fileChooser->launchAsync(juce::FileBrowserComponent::saveMode,[this](const juce::FileChooser& fc){ auto file=fc.getResult(); if(file.getFileName().isEmpty()) return; if(file.getFileExtension()!=".lapauta") file=file.withFileExtension(".lapauta"); juce::DynamicObject::Ptr o=new juce::DynamicObject(); o->setProperty("bpm", bpmSlider.getValue()); o->setProperty("master", masterSlider.getValue()); o->setProperty("sampleFile", currentSampleFile.getFullPathName()); o->setProperty("midiNotes", midiNotes.size()); juce::FileOutputStream out(file); if(out.openedOk()){ out.writeText(juce::JSON::toString(juce::var(o.get())), false,false,"\n"); statusLabel.setText("Guardado: "+file.getFileName(), juce::dontSendNotification);} }); }
-void MainComponent::loadProject(){ fileChooser=std::make_unique<juce::FileChooser>("Abrir", juce::File::getSpecialLocation(juce::File::userDocumentsDirectory), "*.lapauta"); fileChooser->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,[this](const juce::FileChooser& fc){ auto file=fc.getResult(); if(!file.exists()) return; auto j=juce::JSON::parse(file.loadFileAsString()); if(j.isObject()){ auto* o=j.getDynamicObject(); if(o!=nullptr){ bpmSlider.setValue((double)o->getProperty("bpm"), juce::dontSendNotification); masterSlider.setValue((double)o->getProperty("master"), juce::dontSendNotification); juce::String p=o->getProperty("sampleFile").toString(); if(p.isNotEmpty()){ currentSampleFile=juce::File(p); if(currentSampleFile.exists()) loadFileIntoBuffer(currentSampleFile,0); } statusLabel.setText("Abierto: "+file.getFileNameWithoutExtension(), juce::dontSendNotification);} } }); }
-void MainComponent::paint(juce::Graphics& g){ g.fillAll(juce::Colours::white); g.setColour(juce::Colour(0,180,180)); g.fillRect(0,0,getWidth(),60); g.setColour(juce::Colours::lightgrey); g.fillRect(0,60,getWidth(),100); int y=170; for(int i=0;i<tracks.size();++i){ auto &t=tracks[i]; g.setColour(i==selectedTrack?juce::Colours::yellow:t.color); g.fillRect(0,y,200,60); g.setColour(juce::Colours::black); g.drawText(t.name,10,y+5,180,20,juce::Justification::left); g.drawText(t.hasAudio?"🔊 Listo - Arrastralo":"Sin audio",10,y+30,180,20,juce::Justification::left); g.setColour(juce::Colours::darkgrey); g.fillRect(200,y,getWidth()-200,60); if(t.hasAudio){ g.setColour(t.color); float w=(float)getWidth()-220; float prog=t.buffer.getNumSamples()>0?(float)t.pos/(float)t.buffer.getNumSamples():0; g.fillRect(210+t.clipOffset/10,y+15,(int)(w*prog+10),30); } if(isPlaying){ g.setColour(juce::Colours::red); g.fillRect(200+playhead%(getWidth()-200), y, 2, 60); } y+=65; } g.setColour(juce::Colours::darkgrey); g.fillRect(0,getHeight()-70,getWidth(),70); }
-void MainComponent::resized(){ titleLabel.setBounds(15,10,400,40); playButton.setBounds(450,15,80,30); stopButton.setBounds(535,15,80,30); recButton.setBounds(620,15,80,30); metronomeButton.setBounds(705,15,110,30); scanButton.setBounds(15,70,150,30); vstButton.setBounds(170,70,110,30); beatButton.setBounds(285,70,110,30); mixerButton.setBounds(400,70,80,30); loadSampleButton.setBounds(485,70,140,30); saveButton.setBounds(630,70,90,30); loadButton.setBounds(725,70,130,30); renderButton.setBounds(860,70,110,30); addTrackButton.setBounds(975,70,70,30); audioSettingsButton.setBounds(1050,70,130,30); pianoButton.setBounds(15,110,120,30); cutButton.setBounds(140,110,90,30); muteButton.setBounds(235,110,70,30); soloButton.setBounds(310,110,70,30); bpmLabel.setBounds(820,15,40,30); bpmSlider.setBounds(860,15,120,30); masterSlider.setBounds(1000,15,100,30); trackSelector.setBounds(15,getHeight()-60,180,25); eqLabel.setBounds(210,getHeight()-60,40,25); eqLowSlider.setBounds(250,getHeight()-60,70,25); eqMidSlider.setBounds(325,getHeight()-60,70,25); eqHighSlider.setBounds(400,getHeight()-60,70,25); fxLabel.setBounds(480,getHeight()-60,140,25); reverbSlider.setBounds(620,getHeight()-60,70,25); delaySlider.setBounds(695,getHeight()-60,70,25); compSlider.setBounds(770,getHeight()-60,70,25); autoLabel.setBounds(850,getHeight()-60,180,25); autoSlider.setBounds(1030,getHeight()-60,70,25); volSlider.setBounds(1105,getHeight()-60,70,25); panSlider.setBounds(1180,getHeight()-60,70,25); statusLabel.setBounds(15,getHeight()-85,getWidth()-30,20); }
-void MainComponent::prepareToPlay(int s, double sr){ sampleRate=sr; if(pluginInstance) pluginInstance->prepareToPlay(sr, 512); }
-void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info){ if(info.buffer==nullptr) return; auto* out=info.buffer; if(isRecording && writer!=nullptr) writer->writeFromAudioSampleBuffer(*out,0,info.numSamples); out->clear(); if(isPlaying){ for(auto &t: tracks){ if(!t.hasAudio||t.muted) continue; int toCopy=juce::jmin(info.numSamples, t.buffer.getNumSamples()-t.pos); if(toCopy>0){ juce::AudioBuffer<float> tmp(2,toCopy); tmp.clear(); for(int ch=0;ch<2;++ch){ int src=juce::jmin(ch, t.buffer.getNumChannels()-1); tmp.addFrom(ch,0,t.buffer,src,t.pos,toCopy,t.volume); } applyFX(tmp,t); float leftGain = juce::jmin(1.0f, 1.0f - t.pan); float rightGain = juce::jmin(1.0f, 1.0f + t.pan); out->addFrom(0,0,tmp,0,0,toCopy,leftGain); if(out->getNumChannels()>1) out->addFrom(1,0,tmp,1,0,toCopy,rightGain); t.pos+=toCopy; } } playhead+=info.numSamples; if(pluginInstance){ juce::MidiBuffer midi; pluginInstance->processBlock(*o
+
+// ============================================================
+// DESTRUCTOR
+// ============================================================
+
+MainComponent::~MainComponent()
+{
+    stopTimer();
+    shutdownAudio();
+}
+
+// ============================================================
+// TIMER
+// ============================================================
+
+void MainComponent::timerCallback()
+{
+    repaint();
+}
+
+// ============================================================
+// PLAY / STOP
+// ============================================================
+
+void MainComponent::play()
+{
+    for (auto& t : tracks)
+        t.pos = 0;
+
+    playhead = 0;
+    isPlaying = true;
+}
+
+void MainComponent::stop()
+{
+    isPlaying = false;
+}
+
+// ============================================================
+// PISTAS
+// ============================================================
+
+void MainComponent::addTrack()
+{
+    Track t;
+    t.name = "Pista " + juce::String(tracks.size() + 1);
+    t.color = juce::Colours::purple;
+
+    tracks.add(t);
+    trackSelector.addItem(t.name, tracks.size());
+}
+
+// ============================================================
+// METRONOMO
+// ============================================================
+
+void MainComponent::toggleMetronome()
+{
+    metronomeOn = !metronomeOn;
+    statusLabel.setText(
+        metronomeOn ? "Metronomo activado" : "Metronomo apagado",
+        juce::dontSendNotification);
+}
+
+// ============================================================
+// BEAT MAKER
+// ============================================================
+
+void MainComponent::openBeatMaker()
+{
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::AlertWindow::InfoIcon,
+        "BEAT MAKER",
+        "DEMBOW: Kick-Kick-Snare\n"
+        "TRAP: 808 + HiHat\n"
+        "DRILL: 808 deslizado + Snare",
+        "DALE");
+}
+
+// ============================================================
+// MIXER
+// ============================================================
+
+void MainComponent::openMixer()
+{
+    juce::String m;
+
+    for (auto& t : tracks)
+    {
+        m += t.name
+            + " Vol " + juce::String((int)(t.volume * 100)) + "%"
+            + " Pan " + juce::String((int)(t.pan * 100))
+            + " REV " + juce::String((int)(t.reverb * 100)) + "%"
+            + " "
+            + (t.muted ? "MUTE" : "ON")
+            + "\n";
+    }
+
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::AlertWindow::InfoIcon,
+        "MIXER",
+        m,
+        "OK");
+}
+
+// ============================================================
+// AUDIO SETTINGS
+// ============================================================
+
+void MainComponent::openAudioSettings()
+{
+    auto* s = new juce::AudioDeviceSelectorComponent(
+        deviceManager, 0, 2, 0, 2,
+        false, false, true, false);
+
+    s->setSize(600, 500);
+
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned(s);
+    o.dialogTitle = "AUDIO / ASIO";
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = true;
+    o.launchAsync();
+}
+
+// ============================================================
+// PIANO ROLL
+// ============================================================
+
+void MainComponent::openPianoRoll()
+{
+    MidiNote n;
+    n.note = 60 + (int)(midiNotes.size() % 12);
+    n.start = playhead;
+
+    midiNotes.add(n);
+
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::AlertWindow::InfoIcon,
+        "PIANO ROLL",
+        "Notas MIDI: " + juce::String(midiNotes.size()),
+        "OK");
+}
+
+// ============================================================
+// EDICION DE CLIPS
+// ============================================================
+
+void MainComponent::mouseDown(const juce::MouseEvent& e)
+{
+    int y = 170;
+
+    for (int i = 0; i < tracks.size(); ++i)
+    {
+        if (e.y >= y && e.y < y + 60)
+        {
+            selectedTrack = i;
+            trackSelector.setSelectedId(i + 1);
+
+            dragStartX = e.x;
+            dragTrack = i;
+            break;
+        }
+
+        y += 65;
+    }
+}
+
+void MainComponent::mouseDrag(const juce::MouseEvent& e)
+{
+    if (dragTrack >= 0 && dragTrack < tracks.size())
+    {
+        tracks.getReference(dragTrack).clipOffset +=
+            (e.x - dragStartX) / 10;
+
+        dragStartX = e.x;
+        repaint();
+    }
+}
+
+// ============================================================
+// GRABACION
+// ============================================================
+
+void MainComponent::toggleRec()
+{
+    if (selectedTrack < 0 || selectedTrack >= tracks.size())
+        return;
+
+    if (!isRecording)
+    {
+        auto d = juce::File::getSpecialLocation(
+            juce::File::userDocumentsDirectory);
+
+        juce::File f = d.getChildFile("LaPauta_Voz.wav");
+
+        if (f.exists())
+            f.deleteFile();
+
+        juce::WavAudioFormat wav;
+
+        if (auto s = f.createOutputStream())
+        {
+            writer.reset(wav.createWriterFor(
+                s.release(),
+                sampleRate,
+                2,
+                16,
+                {},
+                0));
+
+            if (writer != nullptr)
+            {
+                isRecording = true;
+                isPlaying = false;
+
+                recButton.setButtonText("PARAR");
+
+                statusLabel.setText(
+                    "GRABANDO: " + tracks[selectedTrack].name,
+                    juce::dontSendNotification);
+            }
+        }
+    }
+    else
+    {
+        isRecording = false;
+        writer.reset();
+
+        recButton.setButtonText("REC");
+
+        loadFileIntoBuffer(
+            juce::File::getSpecialLocation(
+                juce::File::userDocumentsDirectory)
+                .getChildFile("LaPauta_Voz.wav"),
+            selectedTrack);
+
+        statusLabel.setText(
+            "Archivo guardado",
+            juce::dontSendNotification);
+    }
+}
+
+// ============================================================
+// CARGAR SAMPLE
+// ============================================================
+
+void MainComponent::loadSample()
+{
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Elige sample",
+        juce::File::getSpecialLocation(
+            juce::File::userDocumentsDirectory),
+        "*.wav;*.mp3;*.aif;*.flac");
+
+    fileChooser->launchAsync(
+        juce::FileBrowserComponent::openMode |
+        juce::FileBrowserComponent::canSelectFiles,
+        [this](const juce::FileChooser& fc)
+        {
+            auto file = fc.getResult();
+
+            if (file.exists())
+            {
+                currentSampleFile = file;
+                loadFileIntoBuffer(file, selectedTrack);
+
+                statusLabel.setText(
+                    "Sample cargado",
+                    juce::dontSendNotification);
+            }
+        });
+}
+
+// ============================================================
+// CARGAR ARCHIVO EN PISTA
+// ============================================================
+
+void MainComponent::loadFileIntoBuffer(juce::File file, int idx)
+{
+    if (idx < 0 || idx >= tracks.size() || !file.exists())
+        return;
+
+    if (auto* r = formatManager.createReaderFor(file))
+    {
+        auto& buffer = tracks.getReference(idx).buffer;
+
+        buffer.setSize(
+            (int)r->numChannels,
+            (int)r->lengthInSamples);
+
+        r->read(
+            &buffer,
+            0,
+            (int)r->lengthInSamples,
+            0,
+            true,
+            true);
+
+        tracks.getReference(idx).hasAudio = true;
+        tracks.getReference(idx).pos = 0;
+
+        delete r;
+    }
+}
+
+// ============================================================
+// BUSCAR VST3 Y JSFX
+// ============================================================
+
+void MainComponent::scanVST3()
+{
+    foundPlugins.clear();
+    pluginDescs.clear();
+    foundJSFX.clear();
+
+    juce::KnownPluginList list;
+
+    juce::FileSearchPath vst3Path(
+        "C:\\Program Files\\Common Files\\VST3;"
+        "C:\\Program Files\\VSTPlugins");
+
+    for (auto* fmt : pluginManager.getFormats())
+    {
+        juce::PluginDirectoryScanner scanner(
+            list,
+            *fmt,
+            vst3Path,
+            true,
+            juce::File());
+
+        juce::String pluginBeingScanned;
+
+        while (scanner.scanNextFile(true, pluginBeingScanned))
+        {
+        }
+    }
+
+    for (int i = 0; i < list.getNumTypes(); ++i)
+    {
+        auto* desc = list.getType(i);
+
+        if (desc != nullptr)
+        {
+            pluginDescs.add(*desc);
+            foundPlugins.add(desc->name);
+        }
+    }
+
+    juce::StringArray jsfxFolders;
+
+    jsfxFolders.add("C:\\Program Files\\REAPER\\Effects");
+
+    jsfxFolders.add(
+        juce::File::getSpecialLocation(
+            juce::File::userApplicationDataDirectory)
+            .getChildFile("REAPER\\Effects")
+            .getFullPathName());
+
+    jsfxFolders.add(
+        juce::File::getSpecialLocation(
+            juce::File::userDocumentsDirectory)
+            .getChildFile("REAPER\\Effects")
+            .getFullPathName());
+
+    for (auto& f : jsfxFolders)
+    {
+        juce::File folder(f);
+
+        if (folder.exists())
+        {
+            auto files = folder.findChildFiles(
+                juce::File::findFiles,
+                true,
+                "*.jsfx");
+
+            for (auto& file : files)
+                foundJSFX.add(file.getFileNameWithoutExtension());
+        }
+    }
+
+    juce::String r =
+        "VST3: " + juce::String(foundPlugins.size()) + " encontrados\n";
+
+    for (auto& n : foundPlugins)
+        r += " - " + n + "\n";
+
+    r += "\nJSFX: " + juce::String(foundJSFX.size()) + " encontrados\n";
+
+    for (auto& n : foundJSFX)
+        r += " - " + n + "\n";
+
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::AlertWindow::InfoIcon,
+        "SCAN VST3 + JSFX",
+        r,
+        "OK");
+}
+
+// ============================================================
+// ABRIR VST3
+// ============================================================
+
+void MainComponent::openVST()
+{
+    if (pluginDescs.isEmpty())
+    {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::InfoIcon,
+            "VST",
+            "Ejecuta SCAN VST3 primero",
+            "OK");
+        return;
+    }
+
+    juce::String err;
+
+    for (auto& desc : pluginDescs)
+    {
+        auto inst = pluginManager.createPluginInstance(
+            desc,
+            sampleRate,
+            512,
+            err);
+
+        if (inst != nullptr)
+        {
+            pluginInstance.reset(inst.release());
+
+            pluginInstance->prepareToPlay(sampleRate, 512);
+
+            if (pluginInstance->hasEditor())
+            {
+                pluginEditor.reset(pluginInstance->createEditor());
+
+                if (pluginEditor != nullptr)
+                {
+                    juce::DialogWindow::LaunchOptions o;
+
+                    o.content.setOwned(pluginEditor.release());
+                    o.dialogTitle = "VST: " + desc.name;
+                    o.escapeKeyTriggersCloseButton = true;
+                    o.useNativeTitleBar = true;
+                    o.resizable = true;
+                    o.launchAs
