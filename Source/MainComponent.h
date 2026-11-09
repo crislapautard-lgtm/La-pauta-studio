@@ -331,14 +331,13 @@ public:
                         if (file.existsAsFile()) file.deleteFile();
 
                         juce::WavAudioFormat wavFormat;
-                        juce::AudioFormatWriterOptions options;
-                        options.bitsPerSample = 24;
-                        options.sampleRate = currentSampleRate;
-                        options.numChannels = 2;
-
+                        std::unique_ptr<juce::OutputStream> fileStream = std::make_unique<juce::FileOutputStream>(file);
+                        
+                        JUCE_BEGIN_IGNORE_WARNINGS_MSVC(4996)
                         auto writer = std::unique_ptr<juce::AudioFormatWriter>(
-                            wavFormat.createWriterFor(std::make_unique<juce::FileOutputStream>(file), options)
+                            wavFormat.createWriterFor(fileStream, currentSampleRate, 2, 24, {}, 0)
                         );
+                        JUCE_END_IGNORE_WARNINGS_MSVC
 
                         if (writer != nullptr) {
                             for (auto& track : tracks) {
