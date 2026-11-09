@@ -73,7 +73,7 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
                 if (trackMute[t].load()) continue;
 
                 float vol = trackVolume[t].load();
-                float pan = trackPan[t].load();
+                float pan = trackPan[t].load(); // -1.0 izq, 1.0 der
                 float lGain = vol * (pan <= 0.0f ? 1.0f : 1.0f - pan);
                 float rGain = vol * (pan >= 0.0f ? 1.0f : 1.0f + pan);
 
