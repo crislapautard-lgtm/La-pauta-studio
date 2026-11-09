@@ -10,10 +10,13 @@ MainComponent::MainComponent()
     {
         // 1. Creamos la pista lógica (audio)
         auto logicalTrack = std::make_unique<AudioTrack>("Pista " + juce::String(i));
+        
+        // Guardamos un puntero crudo para que la interfaz visual pueda controlarla
+        auto* audioTrackRaw = logicalTrack.get();
         tracks.push_back(std::move(logicalTrack));
 
-        // 2. Creamos su cajita visual correspondiente en la pantalla
-        auto trackComp = std::make_unique<TrackComponent>(i);
+        // 2. Creamos su cajita visual pasándole su respectiva pista lógica
+        auto trackComp = std::make_unique<TrackComponent>(i, audioTrackRaw);
         addAndMakeVisible(trackComp.get());
         trackComponents.push_back(std::move(trackComp));
     }
@@ -39,8 +42,7 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& buffe
 {
     juce::MidiBuffer incomingMidi;
     
-    // NOTA: Para grabar, pasamos el buffer completo (que ahora contiene tanto la entrada 
-    // de hardware como el espacio para escribir la salida) hacia nuestro motor.
+    // Procesamos reproducción y grabación en tiempo real
     audioEngine.processBlock (*bufferToFill.buffer, incomingMidi, tracks);
 }
 
@@ -53,8 +55,6 @@ void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff181818));
 }
-
-MainComponent::~MainComponent() // (Ojo: Asegúrate de mantener tu destructor limpio como arriba)
 
 void MainComponent::resized()
 {
