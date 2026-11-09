@@ -1,12 +1,12 @@
 #pragma once
 #include <JuceHeader.h>
 #include "AudioTrack.h"
+#include "TrackComponent.h"
 #include <vector>
 #include <memory>
 
 class ProjectManager {
 public:
-    // Guarda todo el estado del DAW en un archivo de proyecto (.pauta)
     static bool saveProject(const juce::File& file, const std::vector<std::unique_ptr<Track>>& tracks) {
         juce::ValueTree projectState("LA_PAUTA_SESSION");
         projectState.setProperty("version", "1.0", nullptr);
@@ -29,7 +29,6 @@ public:
 
         projectState.addChild(tracksNode, -1, nullptr);
 
-        // Convertir ValueTree a XML y guardarlo en disco
         if (auto xml = std::unique_ptr<juce::XmlElement>(projectState.createXml())) {
             return xml->writeToFile(file, "");
         }
@@ -37,8 +36,11 @@ public:
         return false;
     }
 
-    // Carga un proyecto guardado previamente y restaura todas las pistas y audios
-    static bool loadProject(const juce::File& file, std::vector<std::unique_ptr<Track>>& tracks, std::vector<std::unique_ptr<TrackComponent>>& trackComponents, juce::Component& parentComponent) {
+    static bool loadProject(const juce::File& file, 
+                            std::vector<std::unique_ptr<Track>>& tracks, 
+                            std::vector<std::unique_ptr<TrackComponent>>& trackComponents, 
+                            juce::Component& parentComponent) 
+    {
         if (!file.existsAsFile()) return false;
 
         auto xml = juce::XmlDocument::parse(file);
@@ -47,7 +49,6 @@ public:
         juce::ValueTree projectState = juce::ValueTree::fromXml(*xml);
         if (!projectState.isValid() || projectState.getType() != "LA_PAUTA_SESSION") return false;
 
-        // Limpiamos las pistas actuales antes de cargar la sesión
         tracks.clear();
         trackComponents.clear();
 
@@ -73,7 +74,6 @@ public:
                 newTrack->setMute(muted);
                 newTrack->setSolo(soloed);
 
-                // Si tenía un archivo de audio grabado, lo recargamos
                 if (audioPath.isNotEmpty()) {
                     juce::File audioFile(audioPath);
                     if (audioFile.existsAsFile()) {
