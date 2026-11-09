@@ -15,13 +15,11 @@ public:
 private:
     AudioPluginAudioProcessor& audioProcessor;
     
-    // 4 Pistas en la consola
-    TrackComponent track1 { "Vocal" };
-    TrackComponent track2 { "Guitarra" };
-    TrackComponent track3 { "Bajo" };
-    TrackComponent track4 { "Bateria" };
+    // Contenedor con barra de desplazamiento para que quepan holgadas las 16 pistas + Master
+    juce::Viewport viewport;
+    juce::Component trackContainer;
 
-    // Fader Master visual
+    std::vector<std::unique_ptr<TrackComponent>> tracks;
     TrackComponent masterTrack { "MASTER" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
