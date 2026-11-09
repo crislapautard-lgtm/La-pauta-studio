@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.15)
 
 project(La-Pauta-Studio VERSION 0.1.0)
 
-# Descargar e integrar JUCE automáticamente si no está presente localmente
+# Descargar e integrar JUCE automáticamente mediante FetchContent
 include(FetchContent)
 FetchContent_Declare(
     JUCE
@@ -17,7 +17,10 @@ juce_add_gui_app(La-Pauta-Studio
     PRODUCT_NAME "La Pauta Studio"
 )
 
-# Registrar todos los archivos fuente y cabeceras del proyecto
+# Generar automáticamente el archivo JuceHeader.h requerido por los componentes
+juce_generate_juce_header(La-Pauta-Studio)
+
+# Registrar todos los archivos fuente y cabeceras del proyecto explícitamente
 target_sources(La-Pauta-Studio
     PRIVATE
         Source/Main.cpp
