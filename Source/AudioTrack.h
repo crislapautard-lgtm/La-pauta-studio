@@ -65,13 +65,15 @@ public:
     }
 
     void loadPlugin(const juce::File& file) {
-        juce::VST3PluginFormat vst3Format;
+        juce::AudioPluginFormatManager pluginFormatManager;
+        pluginFormatManager.addDefaultFormats();
+
         juce::PluginDescription description;
         description.fileOrIdentifier = file.getFullPathName();
         description.pluginFormatName = "VST3";
 
         juce::String errorMessage;
-        activePlugin = vst3Format.createPluginInstance(description, currentSampleRate, 512, errorMessage);
+        activePlugin = pluginFormatManager.createPluginInstance(description, currentSampleRate, 512, errorMessage);
 
         if (activePlugin != nullptr) {
             activePlugin->prepareToPlay(currentSampleRate, 512);
