@@ -4,7 +4,7 @@
 
 class AudioTrack : public Track {
 public:
-    AudioTrack(const std::string& trackName) : Track(trackName) {
+    AudioTrack(const std::string& trackName) : Track(trackName), trackNameStr(trackName) {
         formatManager.registerBasicFormats();
     }
 
@@ -65,15 +65,13 @@ public:
     }
 
     void loadPlugin(const juce::File& file) {
-        juce::AudioPluginFormatManager pluginFormatManager;
-        pluginFormatManager.addDefaultFormats();
-
+        juce::VST3PluginFormat vst3Format;
         juce::PluginDescription description;
         description.fileOrIdentifier = file.getFullPathName();
         description.pluginFormatName = "VST3";
 
         juce::String errorMessage;
-        activePlugin = pluginFormatManager.createPluginInstance(description, currentSampleRate, 512, errorMessage);
+        activePlugin = vst3Format.createPluginInstance(description, currentSampleRate, 512, errorMessage);
 
         if (activePlugin != nullptr) {
             activePlugin->prepareToPlay(currentSampleRate, 512);
@@ -83,7 +81,7 @@ public:
     void openPluginEditor() {
         if (activePlugin != nullptr && activePlugin->hasEditor()) {
             if (auto* editor = activePlugin->createEditor()) {
-                pluginEditorWindow = std::make_unique<PluginWindow>(editor, name);
+                pluginEditorWindow = std::make_unique<PluginWindow>(editor, trackNameStr);
             }
         }
     }
@@ -143,6 +141,7 @@ private:
         }
     };
 
+    juce::String trackNameStr;
     juce::AudioFormatManager formatManager;
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
     juce::AudioTransportSource transportSource;
