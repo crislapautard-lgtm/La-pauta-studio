@@ -34,12 +34,16 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // Variables atómicas conectadas directamente con la interfaz
-    std::atomic<float> trackVolume { 0.8f };
-    std::atomic<float> trackPan { 0.0f };
-    std::atomic<bool> trackMute { false };
-    std::atomic<bool> trackSolo { false };
-    std::atomic<bool> trackRec { false };
+    // --- ARREGLO MULTITRACK (4 Pistas + Master) ---
+    static constexpr int numTracks = 4;
+    
+    std::atomic<float> trackVolume[numTracks] { {0.8f}, {0.8f}, {0.8f}, {0.8f} };
+    std::atomic<float> trackPan[numTracks]    { {0.0f}, {0.0f}, {0.0f}, {0.0f} };
+    std::atomic<bool>  trackMute[numTracks]   { {false}, {false}, {false}, {false} };
+    std::atomic<bool>  trackSolo[numTracks]   { {false}, {false}, {false}, {false} };
+    std::atomic<bool>  trackRec[numTracks]    { {false}, {false}, {false}, {false} };
+
+    std::atomic<float> masterVolume { 0.9f };
 
 private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
