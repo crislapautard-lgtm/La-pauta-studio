@@ -68,6 +68,7 @@ bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layou
 }
 #endif
 
+// --- DEFINICIONES OBLIGATORIAS QUE FALTABAN ---
 void AudioPluginAudioProcessor::setTrackRecording(int trackIndex, bool shouldRecord)
 {
     if (trackIndex < 0 || trackIndex >= numTracks) return;
@@ -81,6 +82,11 @@ void AudioPluginAudioProcessor::setTrackRecording(int trackIndex, bool shouldRec
             stopRecordingTrack(trackIndex);
         }
     }
+}
+
+void AudioPluginAudioProcessor::setBPM(float bpm)
+{
+    currentBPM.store(juce::jlimit(40.0f, 300.0f, bpm));
 }
 
 void AudioPluginAudioProcessor::startRecordingTrack(int trackIndex)
@@ -100,7 +106,7 @@ void AudioPluginAudioProcessor::startRecordingTrack(int trackIndex)
     auto* outputStream = file.createOutputStream();
     if (outputStream != nullptr)
     {
-        juce::WavAudioFormat wavFormat; // CORREGIDO AQUÍ
+        juce::WavAudioFormat wavFormat;
         auto* writer = wavFormat.createWriterFor(outputStream, currentSampleRate, 2, 16, {}, 0);
         if (writer != nullptr)
         {
