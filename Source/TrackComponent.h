@@ -62,7 +62,7 @@ public:
         }
         else if (button == &loadPluginButton) {
             fileChooser = std::make_unique<juce::FileChooser>("Seleccionar Plugin VST3",
-                                                              juce::File::getSpecialLocation(juce::File::commonFilesDirectory),
+                                                              juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
                                                               "*.vst3");
             fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                 [audioTrack](const juce::FileChooser& fc) {
