@@ -8,17 +8,14 @@ class TrackComponent : public juce::Component,
 public:
     TrackComponent(int trackId, Track* track) : id(trackId), targetTrack(track)
     {
-        // Botón para cargar archivo de audio WAV
         loadAudioButton.setButtonText("Cargar Audio");
         loadAudioButton.addListener(this);
         addAndMakeVisible(loadAudioButton);
 
-        // Botón para cargar plugin VST3
         loadPluginButton.setButtonText("Cargar VST3");
         loadPluginButton.addListener(this);
         addAndMakeVisible(loadPluginButton);
 
-        // Botón para abrir la interfaz gráfica (Editor) del VST3
         openEditorButton.setButtonText("Abrir VST");
         openEditorButton.addListener(this);
         addAndMakeVisible(openEditorButton);
@@ -31,7 +28,7 @@ public:
     }
 
     void paint(juce::Graphics& g) override {
-        g.fillAll(juce::Colour(0xff2b2b2b)); // Fondo de la pista en el timeline
+        g.fillAll(juce::Colour(0xff2b2b2b));
         g.setColour(juce::Colour(0xff444444));
         g.drawRect(getLocalBounds(), 1);
 
@@ -42,8 +39,6 @@ public:
 
     void resized() override {
         int w = getWidth();
-        
-        // Posicionar los botones de control dentro de la pista en el timeline
         loadAudioButton.setBounds(w - 330, 20, 100, 30);
         loadPluginButton.setBounds(w - 220, 20, 100, 30);
         openEditorButton.setBounds(w - 110, 20, 95, 30);
@@ -67,7 +62,7 @@ public:
         }
         else if (button == &loadPluginButton) {
             fileChooser = std::make_unique<juce::FileChooser>("Seleccionar Plugin VST3",
-                                                              juce::File::getSpecialLocation(juce::File::VST3PlugInFolderPath),
+                                                              juce::File::getSpecialLocation(juce::File::commonFilesDirectory),
                                                               "*.vst3");
             fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                 [audioTrack](const juce::FileChooser& fc) {
