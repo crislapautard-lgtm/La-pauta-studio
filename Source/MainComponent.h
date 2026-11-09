@@ -10,6 +10,7 @@
 #include "ProjectManager.h"
 #include "MixerPanelComponent.h"
 #include "AudioSettingsWindow.h"
+#include "MidiEditorComponent.h" // Incluimos nuestra nueva ventana de Piano Roll
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::Button::Listener,
@@ -60,6 +61,11 @@ public:
         toggleMixerButton.addListener(this);
         toggleMixerButton.setClickingTogglesState(true);
         addAndMakeVisible(toggleMixerButton);
+
+        // --- NUEVO BOTÓN DE PIANO ROLL ---
+        midiEditorButton.setButtonText("Piano Roll");
+        midiEditorButton.addListener(this);
+        addAndMakeVisible(midiEditorButton);
 
         mixerPanel = std::make_unique<MixerPanelComponent>(tracks);
         addChildComponent(mixerPanel.get());
@@ -144,11 +150,9 @@ public:
         juce::AudioBuffer<float> mixBus(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
         mixBus.clear();
 
-        // Buffer dedicado al Bus Auxiliar de Efectos (Enrutamiento de Envíos)
         juce::AudioBuffer<float> auxBus(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
         auxBus.clear();
 
-        // 1. Procesar cada pista de manera individual
         for (size_t i = 0; i < tracks.size(); ++i) {
             juce::AudioBuffer<float> trackBuffer(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
             trackBuffer.clear();
@@ -161,27 +165,22 @@ public:
                 }
             }
 
-            // Procesar audio de la pista (archivo + plugin de insert)
             tracks[i]->processBlock(trackBuffer, midiMessages);
 
-            // Enrutar envío (Send) hacia el Bus Auxiliar
             if (auto* audioTrack = dynamic_cast<AudioTrack*>(tracks[i].get())) {
                 audioTrack->processSendBlock(trackBuffer, auxBus);
             }
 
-            // Sumar la señal directa de la pista al Master Mix Bus
             for (int ch = 0; ch < mixBus.getNumChannels(); ++ch) {
                 mixBus.addFrom(ch, 0, trackBuffer, ch, 0, bufferToFill.numSamples);
             }
         }
 
-        // Procesar y sumar el Bus Auxiliar al Master Mix Bus principal
         auxBus.applyGain(0.7f); 
         for (int ch = 0; ch < mixBus.getNumChannels(); ++ch) {
             mixBus.addFrom(ch, 0, auxBus, ch, 0, bufferToFill.numSamples);
         }
 
-        // --- MOTOR DE METRÓNOMO (CLICK) ---
         if (metronomeActive && isPlayingState) {
             double bpm = bpmSlider.getValue();
             double secondsPerBeat = 60.0 / bpm;
@@ -204,7 +203,7 @@ public:
             }
         }
 
-        mixBus.applyGain(0.9f); // Master Gain protector anti-clipping
+        mixBus.applyGain(0.9f);
 
         for (int ch = 0; ch < bufferToFill.buffer->getNumChannels(); ++ch) {
             bufferToFill.buffer->copyFrom(ch, bufferToFill.buffer->getStartSample(), mixBus, ch, 0, bufferToFill.numSamples);
@@ -240,6 +239,9 @@ public:
         openButton.setBounds(getWidth() - 435, 15, 75, 30);
         configButton.setBounds(getWidth() - 520, 15, 75, 30);
         toggleMixerButton.setBounds(getWidth() - 605, 15, 75, 30);
+        
+        // Posicionar el botón de Piano Roll en la barra superior
+        midiEditorButton.setBounds(getWidth() - 705, 15, 90, 30);
 
         int startY = 65;
         int trackHeight = 70;
@@ -313,6 +315,10 @@ public:
             showMixer = toggleMixerButton.getToggleState();
             resized();
         }
+        else if (button == &midiEditorButton) {
+            // Abrir la ventana flotante del Piano Roll
+            midiEditorWindow = std::make_unique<MidiEditorWindow>("Pista MIDI Principal");
+        }
     }
 
     void sliderValueChanged(juce::Slider* slider) override {}
@@ -330,6 +336,7 @@ private:
     juce::TextButton openButton;
     juce::TextButton configButton;
     juce::TextButton toggleMixerButton;
+    juce::TextButton midiEditorButton; // Botón para abrir el Piano Roll
 
     std::unique_ptr<MixerPanelComponent> mixerPanel;
     bool showMixer = false;
@@ -341,6 +348,7 @@ private:
     bool playClickSample = false;
 
     std::unique_ptr<AudioSettingsWindow> settingsWindow;
+    std::unique_ptr<MidiEditorWindow> midiEditorWindow; // Instancia de la ventana de Piano Roll
     juce::UndoManager undoManager;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
