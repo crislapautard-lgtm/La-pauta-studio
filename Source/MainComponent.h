@@ -53,13 +53,41 @@ public:
 
         setSize(950, 700);
         setAudioChannels(2, 2);
+        
+        // Habilitar captura de teclado para atajos (Ctrl+Z / Ctrl+Y)
+        setWantsKeyboardFocus(true);
+        addKeyListener(this);
     }
 
     ~MainComponent() override {
         shutdownAudio();
     }
 
+    // Captura de atajos de teclado globales para el DAW (Ctrl+Z y Ctrl+Y)
+    bool keyPressed(const juce::KeyPress& key, juce::Component* originatingComponent) override {
+        // Ctrl + Z (Deshacer)
+        if (key == juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0)) {
+            if (undoManager.canUndo()) {
+                undoManager.undo();
+                repaint();
+                return true;
+            }
+        }
+        // Ctrl + Y o Ctrl + Shift + Z (Rehacer)
+        else if (key == juce::KeyPress('y', juce::ModifierKeys::commandModifier, 0) ||
+                 key == juce::KeyPress('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) {
+            if (undoManager.canRedo()) {
+                undoManager.redo();
+                repaint();
+                return true;
+            }
+        }
+        return false;
+    }
+
     void addAudioTrack() {
+        undoManager.beginNewTransaction("Añadir Pista de Audio");
+        
         int trackId = (int)tracks.size() + 1;
         auto newTrack = std::make_unique<AudioTrack>("Pista " + juce::String(trackId));
         auto newTrackComp = std::make_unique<TrackComponent>(trackId, newTrack.get());
@@ -133,7 +161,6 @@ public:
     }
 
     void resized() override {
-        // Ubicación de controles superiores
         toggleMixerButton.setBounds(getWidth() - 450, 15, 75, 30);
         openButton.setBounds(getWidth() - 365, 15, 75, 30);
         saveButton.setBounds(getWidth() - 280, 15, 75, 30);
@@ -146,15 +173,13 @@ public:
         int availableHeightForTracks = getHeight() - startY - 20;
 
         if (showMixer) {
-            availableHeightForTracks -= 210; // Dejamos espacio abajo para la consola
+            availableHeightForTracks -= 210;
         }
 
-        // Distribuir las pistas visuales verticalmente
         for (size_t i = 0; i < trackComponents.size(); ++i) {
             trackComponents[i]->setBounds(15, startY + (int)i * (trackHeight + spacing), getWidth() - 30, trackHeight);
         }
 
-        // Mostrar u ocultar la consola de mezcla inferior
         if (showMixer && mixerPanel != nullptr) {
             mixerPanel->setBounds(15, getHeight() - 210, getWidth() - 30, 200);
             mixerPanel->setVisible(true);
@@ -220,6 +245,8 @@ private:
 
     std::unique_ptr<MixerPanelComponent> mixerPanel;
     bool showMixer = false;
+
+    juce::UndoManager undoManager; // Gestor global de Deshacer / Rehacer
 
     std::unique_ptr<juce::FileChooser> fileChooser;
 
