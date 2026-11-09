@@ -51,6 +51,7 @@ public:
     // --- CARGAR Y REPRODUCIR AUDIO (LO QUE GRABASTE) ---
     void loadAudioFile(const juce::File& file) {
         stopPlayback();
+        currentAudioFile = file; // Guardamos la referencia para el sistema de proyectos
         if (auto* reader = formatManager.createReaderFor(file)) {
             readerSource.reset(new juce::AudioFormatReaderSource(reader, true));
             transportSource.setSource(readerSource.get(), 0, &backgroundThread, reader->sampleRate);
@@ -58,14 +59,20 @@ public:
     }
 
     void startPlayback() {
-        transportSource.start();
-        isPlaying = true;
+        if (readerSource != nullptr) {
+            transportSource.start();
+            isPlaying = true;
+        }
     }
 
     void stopPlayback() {
         transportSource.stop();
         transportSource.setPosition(0.0);
         isPlaying = false;
+    }
+
+    juce::File getCurrentAudioFilePath() const {
+        return currentAudioFile;
     }
 
     // --- GRABACIÓN EN DISCO ---
@@ -83,8 +90,6 @@ public:
         outputFile = file;
 
         juce::WavAudioFormat wavFormat;
-        
-        // Versión moderna y limpia compatible con las exigencias de JUCE
         juce::AudioFormatWriterOptions options;
         options.file = outputFile;
         options.sampleRate = sampleRate;
@@ -104,7 +109,7 @@ public:
         isRecording = false;
         threadedWriter.reset();
         
-        // Al terminar de grabar, cargamos el archivo automáticamente para poder escucharlo
+        // Al terminar de grabar, cargamos el archivo automáticamente
         loadAudioFile(outputFile);
     }
 
@@ -116,10 +121,10 @@ private:
     double currentSampleRate = 44100.0;
     
     juce::File outputFile;
+    juce::File currentAudioFile;
     juce::TimeSliceThread backgroundThread;
     std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> threadedWriter;
 
-    // Componentes de Reproducción
     juce::AudioFormatManager formatManager;
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
     juce::AudioTransportSource transportSource;
