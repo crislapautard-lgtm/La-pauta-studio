@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 
 AudioPluginAudioProcessor::AudioPluginAudioProcessor()
 #ifndef JucePlugin_PreferredChannelConfigurations
@@ -48,41 +49,41 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // Si está en Mute, silenciamos la salida
-    if (trackMute.load()) {
-        buffer.clear();
-        return;
-    }
+    float masterVol = masterVolume.load();
 
-    float vol = trackVolume.load();
-    float pan = trackPan.load(); // -1.0 izq, 1.0 der
-
-    float leftGain  = vol * (pan <= 0.0f ? 1.0f : 1.0f - pan);
-    float rightGain = vol * (pan >= 0.0f ? 1.0f : 1.0f + pan);
-
+    // Aplicamos ganancia general del Master a las muestras de salida
     if (totalNumInputChannels >= 2)
     {
-        auto* channelDataLeft  = buffer.getWritePointer (0);
-        auto* channelDataRight = buffer.getWritePointer (1);
+        auto* left  = buffer.getWritePointer (0);
+        auto* right = buffer.getWritePointer (1);
 
         for (int i = 0; i < buffer.getNumSamples(); ++i)
         {
-            channelDataLeft[i]  *= leftGain;
-            channelDataRight[i] *= rightGain;
-        }
-    }
-    else if (totalNumInputChannels == 1)
-    {
-        auto* channelData = buffer.getWritePointer (0);
-        for (int i = 0; i < buffer.getNumSamples(); ++i)
-        {
-            channelData[i] *= vol;
+            // Simulamos el procesamiento básico combinado de las pistas activas
+            float sumL = 0.0f;
+            float sumR = 0.0f;
+
+            for (int t = 0; t < numTracks; ++t)
+            {
+                if (trackMute[t].load()) continue;
+
+                float vol = trackVolume[t].load();
+                float pan = trackPan[t].load();
+                float lGain = vol * (pan <= 0.0f ? 1.0f : 1.0f - pan);
+                float rGain = vol * (pan >= 0.0f ? 1.0f : 1.0f + pan);
+
+                sumL += left[i] * lGain;
+                sumR += right[i] * rGain;
+            }
+
+            left[i]  = sumL * masterVol;
+            right[i] = sumR * masterVol;
         }
     }
 }
 
 bool AudioPluginAudioProcessor::hasEditor() const { return true; }
-juce::AudioProcessorEditor* AudioPluginAudioProcessor::createEditor() { return new juce::GenericAudioProcessorEditor (*this); }
+juce::AudioProcessorEditor* AudioPluginAudioProcessor::createEditor() { return new AudioPluginAudioProcessorEditor (*this); }
 void AudioPluginAudioProcessor::getStateInformation (juce::MemoryBlock& destData) {}
 void AudioPluginAudioProcessor::setStateInformation (const void* data, int sizeInBytes) {}
 
