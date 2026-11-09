@@ -34,7 +34,7 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // --- 16 PISTAS + MASTER ---
+    // --- 16 PISTAS INDEPENDIENTES + MASTER ---
     static constexpr int numTracks = 16;
     
     std::atomic<float> trackVolume[numTracks];
