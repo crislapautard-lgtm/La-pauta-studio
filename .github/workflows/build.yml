@@ -14,25 +14,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 1. Configura el entorno de compilación de C++ / CMake
+      # 1. Configurar CMake para compilar el DAW
       - name: Configure CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-      # 2. Compila el código fuente de tu DAW para generar el .exe real
+      # 2. Compilar el proyecto para generar el archivo ejecutable real
       - name: Build Project
         run: cmake --build build --config Release
 
-      # 3. Prepara la carpeta con los archivos binarios compilados
+      # 3. Crear la carpeta y copiar los binarios generados de forma segura
       - name: Prepare Files
         run: |
           mkdir OutputFiles
           xcopy /s /y build\Release\* OutputFiles\
 
-      # 4. Genera el instalador con Inno Setup apuntando a los binarios
+      # 4. Construir el instalador con Inno Setup
       - name: Build Installer with Inno Setup
         run: iscc installer.iss
 
-      # 5. Sube el instalador resultante como artefacto de descarga
+      # 5. Subir el artefacto final
       - name: Upload Installer Artifact
         uses: actions/upload-artifact@v4
         with:
