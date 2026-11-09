@@ -23,7 +23,7 @@ public:
 
     bool acceptsMidi() const override;
     bool producesMidi() const override;
-    bool isMuted() const override;
+    bool isMuted() const; // <-- Quitamos 'override' porque causaba el error C3668
     double getTailLengthSeconds() const override;
 
     int getNumPrograms() override;
@@ -35,7 +35,7 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // Variables públicas para que la UI o el MainComponent puedan modificar el volumen y paneo en tiempo real
+    // Variables públicas para el volumen y paneo
     std::atomic<float> trackVolume { 0.8f };
     std::atomic<float> trackPan { 0.0f };
     std::atomic<bool> trackMute { false };
