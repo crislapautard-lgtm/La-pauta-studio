@@ -1,33 +1,109 @@
 #pragma once
+
 #include <JuceHeader.h>
-class MainComponent : public juce::AudioAppComponent, public juce::Timer
+
+// Estructura para representar una pista de audio
+struct Track
+{
+    juce::String name;
+    juce::Colour color;
+    juce::AudioBuffer<float> buffer;
+    float volume = 0.8f;
+    float pan = 0.0f;
+    float reverb = 0.0f;
+    float delay = 0.0f;
+    float comp = 0.0f;
+    float autoVol = 1.0f;
+    bool muted = false;
+    bool hasAudio = false;
+    int pos = 0;
+    int clipOffset = 0;
+};
+
+// Estructura para notas MIDI del Piano Roll
+struct MidiNote
+{
+    int note = 60;
+    int start = 0;
+};
+
+class MainComponent  : public juce::AudioAppComponent,
+                       public juce::Timer
 {
 public:
-    MainComponent(); ~MainComponent() override;
-    void prepareToPlay(int, double) override;
-    void getNextAudioBlock(const juce::AudioSourceChannelInfo&) override;
-    void releaseResources() override;
-    void paint(juce::Graphics&) override;
-    void resized() override;
+    MainComponent();
+    ~MainComponent() override;
+
+    void paint(juce::Graphics&) override {} // Definido o implementado
+    void resized() override {}
+
     void timerCallback() override;
-    void mouseDown(const juce::MouseEvent&) override;
-    void mouseDrag(const juce::MouseEvent&) override;
+
+    void play();
+    void stop();
+    void addTrack();
+    void toggleMetronome();
+    void openBeatMaker();
+    void openMixer();
+    void openAudioSettings();
+    void openPianoRoll();
+    void renderMix() {}
+
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+
+    void toggleRec();
+    void loadSample();
+    void loadFileIntoBuffer(juce::File file, int idx);
+
+    void scanVST3();
+    void openVST();
+
+    void saveProject() {}
+    void loadProject() {}
+
 private:
-    struct Track { juce::String name; juce::AudioSampleBuffer buffer; bool muted=false, solo=false; float volume=0.8f, pan=0; int pos=0, clipOffset=0; bool hasAudio=false; juce::Colour color; float reverb=0, delay=0, comp=0, autoVol=1; };
-    struct MidiNote { int note=60; int start=0; };
-    void play(); void stop(); void toggleRec(); void loadSample(); void loadFileIntoBuffer(juce::File, int);
-    void scanVST3(); void openVST(); void saveProject(); void loadProject(); void addTrack(); void renderMix();
-    void toggleMetronome(); void openBeatMaker(); void openMixer(); void openAudioSettings(); void openPianoRoll(); void applyFX(juce::AudioBuffer<float>&, Track&);
-    juce::Label titleLabel, bpmLabel, statusLabel, eqLabel, fxLabel, autoLabel;
-    juce::TextButton playButton, stopButton, recButton, loadSampleButton, renderButton, scanButton, vstButton, saveButton, loadButton, addTrackButton, metronomeButton, beatButton, mixerButton, audioSettingsButton, pianoButton, cutButton, muteButton, soloButton;
-    juce::Slider bpmSlider, masterSlider, eqLowSlider, eqMidSlider, eqHighSlider, reverbSlider, delaySlider, compSlider, autoSlider, volSlider, panSlider;
+    juce::AudioFormatManager formatManager;
+    juce::AudioPluginFormatManager pluginManager;
+    std::unique_ptr<juce::AudioFormatWriter> writer;
+
+    juce::OwnedArray<Track> tracks;
+    juce::Array<MidiNote> midiNotes;
+
+    int selectedTrack = 0;
+    int bpm = 95;
+    int playhead = 0;
+    bool isPlaying = false;
+    bool isRecording = false;
+    bool metronomeOn = false;
+
+    int dragTrack = -1;
+    int dragStartX = 0;
+
+    float eqLow = 0.0f;
+    float eqMid = 0.0f;
+    float eqHigh = 0.0f;
+
+    juce::File currentSampleFile;
+    std::unique_ptr<juce::FileChooser> fileChooser;
+
+    juce::StringArray foundPlugins;
+    juce::Array<juce::PluginDescription> pluginDescs;
+    juce::StringArray foundJSFX;
+
+    std::unique_ptr<juce::AudioPluginInstance> pluginInstance;
+    std::unique_ptr<juce::AudioProcessorEditor> pluginEditor;
+
+    // Componentes de Interfaz
+    juce::Label titleLabel, statusLabel, bpmLabel, eqLabel, fxLabel, autoLabel;
+    juce::TextButton playButton, stopButton, recButton, loadSampleButton, renderButton;
+    juce::TextButton scanButton, vstButton, saveButton, loadButton, addTrackButton;
+    juce::TextButton metronomeButton, beatButton, mixerButton, audioSettingsButton, pianoButton;
+    juce::TextButton cutButton, muteButton, soloButton;
+
+    juce::Slider bpmSlider, masterSlider, eqLowSlider, eqMidSlider, eqHighSlider;
+    juce::Slider reverbSlider, delaySlider, compSlider, autoSlider, volSlider, panSlider;
     juce::ComboBox trackSelector;
-    juce::AudioFormatManager formatManager; juce::AudioPluginFormatManager pluginManager;
-    std::unique_ptr<juce::FileChooser> fileChooser; std::unique_ptr<juce::AudioFormatWriter> writer;
-    std::unique_ptr<juce::AudioPluginInstance> pluginInstance; std::unique_ptr<juce::AudioProcessorEditor> pluginEditor;
-    juce::Array<Track> tracks; juce::Array<MidiNote> midiNotes; juce::StringArray foundPlugins; juce::Array<juce::PluginDescription> pluginDescs; juce::StringArray foundJSFX;
-    int selectedTrack=0, playhead=0, bpm=95, dragStartX=0, dragTrack=-1;
-    bool isPlaying=false, isRecording=false, metronomeOn=false;
-    double sampleRate=44100; float eqLow=0, eqMid=0, eqHigh=0; juce::File currentSampleFile;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
