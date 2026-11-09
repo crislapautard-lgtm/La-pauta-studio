@@ -45,7 +45,6 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p) : audioProcessor(p)
     masterTrack.onVolumeChanged = [this](float val) { audioProcessor.masterVolume.store(val); };
     trackContainer.addAndMakeVisible(masterTrack);
 
-    // Control de BPM interactivo en tiempo real
     bpmSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     bpmSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
     bpmSlider.setRange(40.0, 300.0, 1.0);
