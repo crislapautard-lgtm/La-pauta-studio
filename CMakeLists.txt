@@ -28,6 +28,9 @@ target_sources(La-Pauta-Studio
         Source/MainComponent.h
         Source/TrackComponent.cpp
         Source/TrackComponent.h
+        Source/Track.h
+        Source/AudioTrack.h
+        Source/MidiTrack.h
 )
 
 # Enlazar los módulos necesarios de JUCE
