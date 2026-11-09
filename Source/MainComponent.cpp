@@ -738,4 +738,21 @@ void MainComponent::openVST()
 
         if (inst != nullptr)
         {
-            pluginInstance
+            pluginInstance.reset(inst.release());
+
+            pluginInstance->prepareToPlay(sampleRate, 512);
+
+            if (pluginInstance->hasEditor())
+            {
+                pluginEditor.reset(pluginInstance->createEditor());
+
+                if (pluginEditor != nullptr)
+                {
+                    juce::DialogWindow::LaunchOptions o;
+
+                    o.content.setOwned(pluginEditor.release());
+                    o.dialogTitle = "VST: " + desc.name;
+                    o.escapeKeyTriggersCloseButton = true;
+                    o.useNativeTitleBar = true;
+                    o.resizable = true;
+                    o.launchAsy
