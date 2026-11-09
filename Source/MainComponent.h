@@ -19,8 +19,6 @@ private:
     juce::Component trackContainer;
 
     std::vector<std::unique_ptr<TrackComponent>> tracks;
-    
-    // Controles visuales para Subgrupos y Auxiliares
     std::vector<std::unique_ptr<TrackComponent>> subgroups;
     std::vector<std::unique_ptr<TrackComponent>> auxes;
     TrackComponent masterTrack { "MASTER" };
