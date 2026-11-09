@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "TrackComponent.h"
 MainComponent::MainComponent()
 {
 for (int i = 1; i <= 3; ++i)
