@@ -2,8 +2,14 @@ cmake_minimum_required(VERSION 3.15)
 
 project(La-Pauta-Studio VERSION 0.1.0)
 
-# Añadir JUCE como subdirectorio (asegúrate de que tu carpeta _deps o modules apunte bien)
-add_subdirectory(JUCE)
+# Descargar e integrar JUCE automáticamente si no está presente localmente
+include(FetchContent)
+FetchContent_Declare(
+    JUCE
+    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+    GIT_TAG        master
+)
+FetchContent_MakeAvailable(JUCE)
 
 juce_add_gui_app(La-Pauta-Studio
     VERSION 0.1.0
@@ -11,7 +17,7 @@ juce_add_gui_app(La-Pauta-Studio
     PRODUCT_NAME "La Pauta Studio"
 )
 
-# Registrar todos los archivos fuente y cabeceras del proyecto explícitamente
+# Registrar todos los archivos fuente y cabeceras del proyecto
 target_sources(La-Pauta-Studio
     PRIVATE
         Source/Main.cpp
