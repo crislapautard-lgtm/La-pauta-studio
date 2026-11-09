@@ -144,6 +144,11 @@ public:
         juce::AudioBuffer<float> mixBus(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
         mixBus.clear();
 
+        // Buffer dedicado al Bus Auxiliar de Efectos (Enrutamiento de Envíos)
+        juce::AudioBuffer<float> auxBus(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
+        auxBus.clear();
+
+        // 1. Procesar cada pista de manera individual
         for (size_t i = 0; i < tracks.size(); ++i) {
             juce::AudioBuffer<float> trackBuffer(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
             trackBuffer.clear();
@@ -156,13 +161,27 @@ public:
                 }
             }
 
+            // Procesar audio de la pista (archivo + plugin de insert)
             tracks[i]->processBlock(trackBuffer, midiMessages);
 
+            // Enrutar envío (Send) hacia el Bus Auxiliar
+            if (auto* audioTrack = dynamic_cast<AudioTrack*>(tracks[i].get())) {
+                audioTrack->processSendBlock(trackBuffer, auxBus);
+            }
+
+            // Sumar la señal directa de la pista al Master Mix Bus
             for (int ch = 0; ch < mixBus.getNumChannels(); ++ch) {
                 mixBus.addFrom(ch, 0, trackBuffer, ch, 0, bufferToFill.numSamples);
             }
         }
 
+        // Procesar y sumar el Bus Auxiliar al Master Mix Bus principal
+        auxBus.applyGain(0.7f); 
+        for (int ch = 0; ch < mixBus.getNumChannels(); ++ch) {
+            mixBus.addFrom(ch, 0, auxBus, ch, 0, bufferToFill.numSamples);
+        }
+
+        // --- MOTOR DE METRÓNOMO (CLICK) ---
         if (metronomeActive && isPlayingState) {
             double bpm = bpmSlider.getValue();
             double secondsPerBeat = 60.0 / bpm;
@@ -185,7 +204,7 @@ public:
             }
         }
 
-        mixBus.applyGain(0.9f);
+        mixBus.applyGain(0.9f); // Master Gain protector anti-clipping
 
         for (int ch = 0; ch < bufferToFill.buffer->getNumChannels(); ++ch) {
             bufferToFill.buffer->copyFrom(ch, bufferToFill.buffer->getStartSample(), mixBus, ch, 0, bufferToFill.numSamples);
