@@ -100,7 +100,7 @@ void AudioPluginAudioProcessor::startRecordingTrack(int trackIndex)
     auto* outputStream = file.createOutputStream();
     if (outputStream != nullptr)
     {
-        ju::WavAudioFormat wavFormat;
+        juce::WavAudioFormat wavFormat; // CORREGIDO AQUÍ
         auto* writer = wavFormat.createWriterFor(outputStream, currentSampleRate, 2, 16, {}, 0);
         if (writer != nullptr)
         {
@@ -118,7 +118,6 @@ void AudioPluginAudioProcessor::stopRecordingTrack(int trackIndex)
     rec->isRecording.store(false);
     rec->backgroundThread.stopThread(2000);
 
-    const juce::ScopedLock locker(juce::CriticalSection{});
     rec->writer.reset();
 }
 
