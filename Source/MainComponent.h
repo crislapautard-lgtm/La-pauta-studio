@@ -7,64 +7,183 @@
 #include "AudioTrack.h"
 #include "MidiTrack.h"
 #include "AudioEngine.h"
+#include "ProjectManager.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::Button::Listener
 {
 public:
-    MainComponent();
-    ~MainComponent() override;
+    MainComponent() {
+        // Pista inicial por defecto para empezar a trabajar rápido
+        addAudioTrack();
 
-    void paint (juce::Graphics&) override;
-    void resized() override;
+        // Botón Global de PLAY
+        playButton.setButtonText("PLAY");
+        playButton.addListener(this);
+        playButton.setColour(juce::TextButton::buttonColourId, juce::Colours::darkgrey);
+        playButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::green);
+        playButton.setClickingTogglesState(true);
+        addAndMakeVisible(playButton);
 
-    // Métodos obligatorios del ciclo de vida de audio en tiempo real de JUCE
-    void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override;
-    void getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill) override;
-    void releaseResources() override;
+        // Botón para Añadir Pista
+        addTrackButton.setButtonText("+ Pista");
+        addTrackButton.addListener(this);
+        addAndMakeVisible(addTrackButton);
 
-    // Listener de botones globales (Play / Añadir Pista)
-    void buttonClicked (juce::Button* button) override;
+        // Botón Guardar Proyecto (.pauta)
+        saveButton.setButtonText("Guardar");
+        saveButton.addListener(this);
+        addAndMakeVisible(saveButton);
 
-    // Función unificada para crear y desplegar una nueva pista de audio con su GUI
+        // Botón Abrir Proyecto (.pauta)
+        openButton.setButtonText("Abrir");
+        openButton.addListener(this);
+        addAndMakeVisible(openButton);
+
+        setSize(900, 600);
+        setAudioChannels(2, 2);
+    }
+
+    ~MainComponent() override {
+        shutdownAudio();
+    }
+
     void addAudioTrack() {
         int trackId = (int)tracks.size() + 1;
-        auto newTrack = std::make_unique<AudioTrack>("Pista de Audio " + std::to_string(trackId));
-        
-        // Creamos su componente visual enlazándolo directamente a su pista lógica
+        auto newTrack = std::make_unique<AudioTrack>("Pista " + juce::String(trackId));
         auto newTrackComp = std::make_unique<TrackComponent>(trackId, newTrack.get());
 
         tracks.push_back(std::move(newTrack));
         trackComponents.push_back(std::move(newTrackComp));
 
         addAndMakeVisible(trackComponents.back().get());
-        resized(); // Reacomodamos la pantalla para que aparezca la nueva pista
-    }
-
-    // Función para crear una nueva pista MIDI
-    void addMidiTrack() {
-        int trackId = (int)tracks.size() + 1;
-        auto newTrack = std::make_unique<MidiTrack>("Pista MIDI " + std::to_string(trackId));
-        
-        tracks.push_back(std::move(newTrack));
-        // Nota: Si creas un MidiTrackComponent, lo agregarías aquí igual que el de audio.
-        
         resized();
     }
 
+    void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override {
+        for (auto& track : tracks) {
+            if (auto* audioTrack = dynamic_cast<AudioTrack*>(track.get())) {
+                audioTrack->prepareToPlay(samplesPerBlockExpected, sampleRate);
+            }
+        }
+    }
+
+    void getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill) override {
+        bufferToFill.clearBuffer();
+
+        juce::MidiBuffer midiMessages;
+        juce::AudioBuffer<float> mixBus(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
+        mixBus.clear();
+
+        for (size_t i = 0; i < tracks.size(); ++i) {
+            juce::AudioBuffer<float> trackBuffer(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
+            trackBuffer.clear();
+
+            if (auto* audioTrack = dynamic_cast<AudioTrack*>(tracks[i].get())) {
+                if (audioTrack->getIsRecording()) {
+                    audioTrack->processRecording(bufferToFill.buffer->getArrayOfReadPointers(), 
+                                                   bufferToFill.buffer->getNumChannels(), 
+                                                   bufferToFill.numSamples);
+                }
+            }
+
+            tracks[i]->processBlock(trackBuffer, midiMessages);
+
+            for (int ch = 0; ch < mixBus.getNumChannels(); ++ch) {
+                mixBus.addFrom(ch, 0, trackBuffer, ch, 0, bufferToFill.numSamples);
+            }
+        }
+
+        mixBus.applyGain(0.9f); // Master Gain protector anti-clipping
+
+        for (int ch = 0; ch < bufferToFill.buffer->getNumChannels(); ++ch) {
+            bufferToFill.buffer->copyFrom(ch, bufferToFill.buffer->getStartSample(), mixBus, ch, 0, bufferToFill.numSamples);
+        }
+    }
+
+    void releaseResources() override {
+        for (auto& track : tracks) {
+            if (auto* audioTrack = dynamic_cast<AudioTrack*>(track.get())) {
+                audioTrack->releaseResources();
+            }
+        }
+    }
+
+    void paint (juce::Graphics& g) override {
+        g.fillAll(juce::Colour(0xff1e1e1e)); // Fondo oscuro DAW
+        
+        g.setColour(juce::Colours::white);
+        g.setFont(18.0f);
+        g.drawText("LA PAUTA STUDIO - DAW Pro", 20, 15, 300, 30, juce::Justification::left);
+    }
+
+    void resized() override {
+        // Ubicación de controles de transporte y archivos en la barra superior
+        openButton.setBounds(getWidth() - 360, 15, 75, 30);
+        saveButton.setBounds(getWidth() - 275, 15, 75, 30);
+        addTrackButton.setBounds(getWidth() - 190, 15, 80, 30);
+        playButton.setBounds(getWidth() - 100, 15, 80, 30);
+
+        // Distribuir las pistas visuales verticalmente
+        int startY = 65;
+        int trackHeight = 70;
+        int spacing = 10;
+
+        for (size_t i = 0; i < trackComponents.size(); ++i) {
+            trackComponents[i]->setBounds(15, startY + (int)i * (trackHeight + spacing), getWidth() - 30, trackHeight);
+        }
+    }
+
+    void buttonClicked (juce::Button* button) override {
+        if (button == &playButton) {
+            bool shouldPlay = playButton.getToggleState();
+            for (auto& track : tracks) {
+                if (auto* audioTrack = dynamic_cast<AudioTrack*>(track.get())) {
+                    if (shouldPlay) audioTrack->startPlayback();
+                    else audioTrack->stopPlayback();
+                }
+            }
+        }
+        else if (button == &addTrackButton) {
+            addAudioTrack();
+        }
+        else if (button == &saveButton) {
+            fileChooser = std::make_unique<juce::FileChooser>("Guardar Sesión de La Pauta Studio",
+                                                              juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+                                                              "*.pauta");
+            fileChooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                [this](const juce::FileChooser& fc) {
+                    auto file = fc.getResult();
+                    if (file != juce::File{}) {
+                        ProjectManager::saveProject(file, tracks);
+                    }
+                });
+        }
+        else if (button == &openButton) {
+            fileChooser = std::make_unique<juce::FileChooser>("Abrir Sesión de La Pauta Studio",
+                                                              juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+                                                              "*.pauta");
+            fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                [this](const juce::FileChooser& fc) {
+                    auto file = fc.getResult();
+                    if (file != juce::File{}) {
+                        ProjectManager::loadProject(file, tracks, trackComponents, *this);
+                    }
+                });
+        }
+    }
+
 private:
-    // Motor encargado de procesar las pistas lógicas en tiempo real
     AudioEngine audioEngine;
-
-    // Lista principal que almacena las pistas lógicas (sonido/datos)
     std::vector<std::unique_ptr<Track>> tracks;
-
-    // Lista para almacenar los componentes visuales en la interfaz
     std::vector<std::unique_ptr<TrackComponent>> trackComponents;
-
-    // Botones de control global del DAW
+    
     juce::TextButton playButton;
     juce::TextButton addTrackButton;
+    juce::TextButton saveButton;
+    juce::TextButton openButton;
+
+    std::unique_ptr<juce::FileChooser> fileChooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
