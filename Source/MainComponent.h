@@ -8,13 +8,14 @@
 #include "MidiTrack.h"
 #include "AudioEngine.h"
 #include "ProjectManager.h"
+#include "MixerPanelComponent.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::Button::Listener
 {
 public:
     MainComponent() {
-        // Pista inicial por defecto para empezar a trabajar rápido
+        // Pista inicial por defecto
         addAudioTrack();
 
         // Botón Global de PLAY
@@ -40,7 +41,17 @@ public:
         openButton.addListener(this);
         addAndMakeVisible(openButton);
 
-        setSize(900, 600);
+        // Botón Toggle Mixer Console
+        toggleMixerButton.setButtonText("Mixer");
+        toggleMixerButton.addListener(this);
+        toggleMixerButton.setClickingTogglesState(true);
+        addAndMakeVisible(toggleMixerButton);
+
+        // Inicializar consola de mezcla (oculta por defecto)
+        mixerPanel = std::make_unique<MixerPanelComponent>(tracks);
+        addChildComponent(mixerPanel.get());
+
+        setSize(950, 700);
         setAudioChannels(2, 2);
     }
 
@@ -57,6 +68,10 @@ public:
         trackComponents.push_back(std::move(newTrackComp));
 
         addAndMakeVisible(trackComponents.back().get());
+        
+        if (mixerPanel != nullptr)
+            mixerPanel->updateStripping();
+
         resized();
     }
 
@@ -118,19 +133,33 @@ public:
     }
 
     void resized() override {
-        // Ubicación de controles de transporte y archivos en la barra superior
-        openButton.setBounds(getWidth() - 360, 15, 75, 30);
-        saveButton.setBounds(getWidth() - 275, 15, 75, 30);
-        addTrackButton.setBounds(getWidth() - 190, 15, 80, 30);
-        playButton.setBounds(getWidth() - 100, 15, 80, 30);
+        // Ubicación de controles superiores
+        toggleMixerButton.setBounds(getWidth() - 450, 15, 75, 30);
+        openButton.setBounds(getWidth() - 365, 15, 75, 30);
+        saveButton.setBounds(getWidth() - 280, 15, 75, 30);
+        addTrackButton.setBounds(getWidth() - 195, 15, 80, 30);
+        playButton.setBounds(getWidth() - 105, 15, 90, 30);
 
-        // Distribuir las pistas visuales verticalmente
         int startY = 65;
         int trackHeight = 70;
         int spacing = 10;
+        int availableHeightForTracks = getHeight() - startY - 20;
 
+        if (showMixer) {
+            availableHeightForTracks -= 210; // Dejamos espacio abajo para la consola
+        }
+
+        // Distribuir las pistas visuales verticalmente
         for (size_t i = 0; i < trackComponents.size(); ++i) {
             trackComponents[i]->setBounds(15, startY + (int)i * (trackHeight + spacing), getWidth() - 30, trackHeight);
+        }
+
+        // Mostrar u ocultar la consola de mezcla inferior
+        if (showMixer && mixerPanel != nullptr) {
+            mixerPanel->setBounds(15, getHeight() - 210, getWidth() - 30, 200);
+            mixerPanel->setVisible(true);
+        } else if (mixerPanel != nullptr) {
+            mixerPanel->setVisible(false);
         }
     }
 
@@ -168,8 +197,13 @@ public:
                     auto file = fc.getResult();
                     if (file != juce::File{}) {
                         ProjectManager::loadProject(file, tracks, trackComponents, *this);
+                        if (mixerPanel != nullptr) mixerPanel->updateStripping();
                     }
                 });
+        }
+        else if (button == &toggleMixerButton) {
+            showMixer = toggleMixerButton.getToggleState();
+            resized();
         }
     }
 
@@ -182,6 +216,10 @@ private:
     juce::TextButton addTrackButton;
     juce::TextButton saveButton;
     juce::TextButton openButton;
+    juce::TextButton toggleMixerButton;
+
+    std::unique_ptr<MixerPanelComponent> mixerPanel;
+    bool showMixer = false;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
 
