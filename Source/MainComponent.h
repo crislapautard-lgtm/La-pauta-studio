@@ -34,8 +34,13 @@ public:
     MainComponent();
     ~MainComponent() override;
 
-    void paint(juce::Graphics&) override {} // Definido o implementado
+    void paint(juce::Graphics&) override {}
     void resized() override {}
+
+    // Funciones obligatorias de AudioAppComponent
+    void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
+    void releaseResources() override;
+    void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override;
 
     void timerCallback() override;
 
@@ -67,7 +72,7 @@ private:
     juce::AudioPluginFormatManager pluginManager;
     std::unique_ptr<juce::AudioFormatWriter> writer;
 
-    juce::OwnedArray<Track> tracks;
+    juce::Array<Track> tracks; // Cambiado a Array por valor para evitar problemas de OwnedArray
     juce::Array<MidiNote> midiNotes;
 
     int selectedTrack = 0;
