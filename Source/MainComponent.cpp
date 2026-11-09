@@ -18,11 +18,12 @@ MainComponent::MainComponent()
     addAndMakeVisible(metronomeButton); metronomeButton.setButtonText("METRONOMO");
     addAndMakeVisible(beatButton); beatButton.setButtonText("BEAT MAKER");
     addAndMakeVisible(mixerButton); mixerButton.setButtonText("MIXER");
+    addAndMakeVisible(audioSettingsButton); audioSettingsButton.setButtonText("⚙️ AUDIO / ASIO");
     playButton.onClick=[this]{play();}; stopButton.onClick=[this]{stop();}; recButton.onClick=[this]{toggleRec();};
     loadSampleButton.onClick=[this]{loadSample();}; renderButton.onClick=[this]{renderMix();};
     scanButton.onClick=[this]{scanVST3();}; saveButton.onClick=[this]{saveProject();}; loadButton.onClick=[this]{loadProject();};
     addTrackButton.onClick=[this]{addTrack();}; metronomeButton.onClick=[this]{toggleMetronome();};
-    beatButton.onClick=[this]{openBeatMaker();}; mixerButton.onClick=[this]{openMixer();};
+    beatButton.onClick=[this]{openBeatMaker();}; mixerButton.onClick=[this]{openMixer();}; audioSettingsButton.onClick=[this]{openAudioSettings();};
     addAndMakeVisible(statusLabel); statusLabel.setText("Listo. Elige pista, graba voz, carga sample, guarda proyecto.", juce::dontSendNotification); statusLabel.setColour(juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible(bpmLabel); bpmLabel.setText("BPM", juce::dontSendNotification); bpmLabel.setColour(juce::Label::textColourId, juce::Colours::white);
     addAndMakeVisible(bpmSlider); bpmSlider.setRange(60,200,1); bpmSlider.setValue(95); bpmSlider.onValueChange=[this]{bpm=(int)bpmSlider.getValue();};
@@ -41,6 +42,19 @@ void MainComponent::addTrack(){ Track t; t.name="Pista "+juce::String(tracks.siz
 void MainComponent::toggleMetronome(){ metronomeOn=!metronomeOn; statusLabel.setText(metronomeOn?"Metronomo ON "+juce::String(bpm)+" BPM":"Metronomo OFF", juce::dontSendNotification); }
 void MainComponent::openBeatMaker(){ juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,"BEAT MAKER","DEMBOW: Kick - Kick - Snare\nTRAP: 808 + HiHat\nDRILL: 808 deslizado + Snare\n\nCarga tus drums con CARGAR SAMPLE en cada pista.", "DALE"); }
 void MainComponent::openMixer(){ juce::String m; for(auto &t: tracks) m+=t.name+" | Vol "+juce::String((int)(t.volume*100))+"% | "+(t.muted?"MUTE":"ON")+"\n"; juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,"MIXER",m,"OK"); }
+void MainComponent::openAudioSettings()
+{
+    auto* selector = new juce::AudioDeviceSelectorComponent(getAudioDeviceManager(), 0, 2, 0, 2, false, false, true, false);
+    selector->setSize(600, 500);
+    juce::DialogWindow::LaunchOptions opts;
+    opts.content.setOwned(selector);
+    opts.dialogTitle = "AUDIO / ASIO - Elige tu tarjeta";
+    opts.dialogBackgroundColour = juce::Colours::darkgrey;
+    opts.escapeKeyTriggersCloseButton = true;
+    opts.useNativeTitleBar = true;
+    opts.resizable = true;
+    opts.launchAsync();
+}
 void MainComponent::toggleRec(){
     if(!isRecording){
         auto docs=juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
@@ -95,7 +109,7 @@ void MainComponent::resized(){
     playButton.setBounds(450,15,80,30); stopButton.setBounds(535,15,80,30); recButton.setBounds(620,15,110,30); metronomeButton.setBounds(735,15,120,30);
     scanButton.setBounds(15,70,130,30); beatButton.setBounds(150,70,120,30); mixerButton.setBounds(275,70,90,30);
     loadSampleButton.setBounds(370,70,160,30); saveButton.setBounds(535,70,160,30); loadButton.setBounds(700,70,140,30);
-    renderButton.setBounds(845,70,120,30); addTrackButton.setBounds(970,70,70,30);
+    renderButton.setBounds(845,70,120,30); addTrackButton.setBounds(970,70,70,30); audioSettingsButton.setBounds(1045,70,140,30);
     bpmLabel.setBounds(870,15,40,30); bpmSlider.setBounds(910,15,120,30); masterSlider.setBounds(1050,15,100,30);
     trackSelector.setBounds(15,getHeight()-80,200,25);
     eqLabel.setBounds(230,getHeight()-80,180,25); eqLowSlider.setBounds(410,getHeight()-80,100,25); eqMidSlider.setBounds(520,getHeight()-80,100,25); eqHighSlider.setBounds(630,getHeight()-80,100,25);
