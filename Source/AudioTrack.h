@@ -33,23 +33,19 @@ public:
     void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override {
         if (muted) return;
 
-        // 1. Procesar audio desde el archivo de audio cargado si hay reproducción activa
         if (isPlaying && readerSource != nullptr) {
             juce::AudioSourceChannelInfo sourceInfo(&buffer, 0, buffer.getNumSamples());
             transportSource.getNextAudioBlock(sourceInfo);
         }
 
-        // 2. Si hay un plugin VST3 cargado, procesamos el audio a través de él
         if (activePlugin != nullptr) {
             juce::MidiBuffer dummyMidi;
             activePlugin->processBlock(buffer, dummyMidi);
         }
 
-        // 3. Aplicar Ganancia de Panal (Volumen y Paneo estéreo básico)
         buffer.applyGain(volume);
     }
 
-    // --- CARGAR ARCHIVO DE AUDIO ---
     void loadAudioFile(const juce::File& file) {
         audioFile = file;
         auto* reader = formatManager.createReaderFor(file);
@@ -60,7 +56,6 @@ public:
         }
     }
 
-    // --- CARGAR PLUGIN VST3 ---
     void loadPlugin(const juce::File& file) {
         juce::VST3PluginFormat vst3Format;
         juce::PluginDescription description;
@@ -75,7 +70,6 @@ public:
         }
     }
 
-    // --- ABRIR LA INTERFAZ GRÁFICA (EDITOR) DEL VST3 EN VENTANA FLOTANTE ---
     void openPluginEditor() {
         if (activePlugin != nullptr && activePlugin->hasEditor()) {
             auto* editor = activePlugin->createEditor();
@@ -113,7 +107,6 @@ public:
     juce::File getCurrentAudioFilePath() const { return audioFile; }
 
 private:
-    // Ventana flotante independiente para la interfaz gráfica del VST3
     class PluginWindow : public juce::DocumentWindow {
     public:
         PluginWindow(juce::AudioProcessorEditor* editor, const juce::String& trackName)
@@ -121,4 +114,31 @@ private:
                              juce::Desktop::getInstance().getDefaultLookAndFeel()
                                  .findColour(juce::ResizableWindow::backgroundColourId),
                              DocumentWindow::allButtons)
+        {
+            setContentOwned(editor, true);
+            setResizable(true, true);
+            centreWithSize(editor->getWidth(), editor->getHeight());
+            setVisible(true);
+        }
 
+        ~PluginWindow() override = default;
+
+        void closeButtonPressed() override {
+            delete this;
+        }
+    };
+
+    juce::AudioFormatManager formatManager;
+    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
+    juce::AudioTransportSource transportSource;
+    juce::TimeSliceThread readAheadThread { "Audio ReadAhead Thread" };
+    
+    std::unique_ptr<juce::AudioPluginInstance> activePlugin;
+    std::unique_ptr<PluginWindow> pluginEditorWindow;
+
+    juce::File audioFile;
+    double currentSampleRate = 44100.0;
+    bool isPlaying = false;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioTrack)
+};
