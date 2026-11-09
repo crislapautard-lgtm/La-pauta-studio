@@ -5,7 +5,7 @@
 class AudioTrack : public Track {
 public:
     AudioTrack(const std::string& name) : Track(name) {
-        formatManager.addBasicFormats();
+        formatManager.registerBasicFormats();
     }
 
     ~AudioTrack() override {
@@ -72,8 +72,7 @@ public:
 
     void openPluginEditor() {
         if (activePlugin != nullptr && activePlugin->hasEditor()) {
-            auto* editor = activePlugin->createEditor();
-            if (editor != nullptr) {
+            if (auto* editor = activePlugin->createEditor()) {
                 pluginEditorWindow = std::make_unique<PluginWindow>(editor, getName());
             }
         }
@@ -103,6 +102,9 @@ public:
 
     void setSolo(bool shouldSolo) { soloed = shouldSolo; }
     bool isSoloed() const { return soloed; }
+
+    bool getIsRecording() const { return isRecordingState; }
+    void processRecording(const float* const* channelData, int numChannels, int numSamples) {}
 
     juce::File getCurrentAudioFilePath() const { return audioFile; }
 
@@ -139,6 +141,12 @@ private:
     juce::File audioFile;
     double currentSampleRate = 44100.0;
     bool isPlaying = false;
+    bool isRecordingState = false;
+
+    float volume = 0.8f;
+    float pan = 0.0f;
+    bool muted = false;
+    bool soloed = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioTrack)
 };
