@@ -23,5 +23,8 @@ private:
     std::vector<std::unique_ptr<TrackComponent>> auxes;
     TrackComponent masterTrack { "MASTER" };
 
+    juce::Slider bpmSlider;
+    juce::Label  bpmLabel;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
