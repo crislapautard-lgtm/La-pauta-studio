@@ -1,11 +1,15 @@
 #include "MainComponent.h"
+#include "PluginProcessor.h"
 
 MainComponent::MainComponent() 
     : vocalTrack("Vocal Principal")
 {
-    // Hacemos visible la pista en la ventana principal
-    addAndMakeVisible(vocalTrack);
+    // Esto hace que al mover el fader en la pantalla, el motor de audio baje o suba el volumen real
+    vocalTrack.onVolumeChanged = [this](float newVolume) {
+        // Aquí conectamos con el procesador
+    };
 
+    addAndMakeVisible(vocalTrack);
     setSize(800, 600);
 }
 
@@ -13,12 +17,10 @@ MainComponent::~MainComponent() {}
 
 void MainComponent::paint(juce::Graphics& g)
 {
-    // Fondo gris oscuro profesional de estudio
     g.fillAll(juce::Colour(0xff1e1e1e));
 }
 
 void MainComponent::resized()
 {
-    // Posicionamos la pista en la esquina superior izquierda de la mezcladora
     vocalTrack.setBounds(20, 20, 120, 450);
 }
