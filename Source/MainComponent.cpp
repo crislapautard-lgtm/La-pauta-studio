@@ -2,7 +2,6 @@
 
 MainComponent::MainComponent(AudioPluginAudioProcessor& p) : audioProcessor(p)
 {
-    // 1. Crear 16 Pistas
     for (int i = 0; i < AudioPluginAudioProcessor::numTracks; ++i)
     {
         auto trackName = "Vocal " + juce::String(i + 1);
@@ -12,13 +11,15 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p) : audioProcessor(p)
         trackComp->onPanChanged    = [this, i](float val) { audioProcessor.trackPan[i].store(val); };
         trackComp->onMuteToggled   = [this, i](bool val)  { audioProcessor.trackMute[i].store(val); return val; };
         trackComp->onSoloToggled   = [this, i](bool val)  { audioProcessor.trackSolo[i].store(val); return val; };
-        trackComp->onRecordToggled = [this, i](bool val)  { audioProcessor.trackRec[i].store(val); return val; };
+        trackComp->onRecordToggled = [this, i](bool val)  { 
+            audioProcessor.setTrackRecording(i, val); 
+            return val; 
+        };
 
         trackContainer.addAndMakeVisible(trackComp.get());
         tracks.push_back(std::move(trackComp));
     }
 
-    // 2. Crear 4 Subgrupos (Sub 1 a Sub 4)
     for (int s = 0; s < AudioPluginAudioProcessor::numSubgroups; ++s)
     {
         auto subName = "SUB " + juce::String(s + 1);
@@ -30,7 +31,6 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p) : audioProcessor(p)
         subgroups.push_back(std::move(subComp));
     }
 
-    // 3. Crear 2 Canales Auxiliares (Aux A y Aux B)
     for (int a = 0; a < AudioPluginAudioProcessor::numAuxes; ++a)
     {
         auto auxName = (a == 0) ? "AUX Reverb" : "AUX Delay";
@@ -42,7 +42,6 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p) : audioProcessor(p)
         auxes.push_back(std::move(auxComp));
     }
 
-    // 4. Configurar Master
     masterTrack.onVolumeChanged = [this](float val) { audioProcessor.masterVolume.store(val); };
     trackContainer.addAndMakeVisible(masterTrack);
 
@@ -67,7 +66,6 @@ void MainComponent::resized()
     int trackWidth = 110;
     int spacing = 8;
     
-    // Cálculo total de ancho para el scroll: 16 pistas + 4 subgrupos + 2 aux + 1 master
     int totalItems = AudioPluginAudioProcessor::numTracks + AudioPluginAudioProcessor::numSubgroups + AudioPluginAudioProcessor::numAuxes + 1;
     int totalWidth = (totalItems * (trackWidth + spacing)) + 60;
 
@@ -75,33 +73,28 @@ void MainComponent::resized()
 
     int xPos = 15;
 
-    // Posicionar 16 Pistas
     for (int i = 0; i < AudioPluginAudioProcessor::numTracks; ++i)
     {
         tracks[i]->setBounds(xPos, 15, trackWidth, 450);
         xPos += trackWidth + spacing;
     }
 
-    xPos += 15; // Separador visual de sección
+    xPos += 15;
 
-    // Posicionar Subgrupos
     for (int s = 0; s < AudioPluginAudioProcessor::numSubgroups; ++s)
     {
         subgroups[s]->setBounds(xPos, 15, trackWidth, 450);
         xPos += trackWidth + spacing;
     }
 
-    xPos += 15; // Separador visual de sección
+    xPos += 15;
 
-    // Posicionar Auxiliares
     for (int a = 0; a < AudioPluginAudioProcessor::numAuxes; ++a)
     {
         auxes[a]->setBounds(xPos, 15, trackWidth, 450);
         xPos += trackWidth + spacing;
     }
 
-    xPos += 20; // Separador final para el Master
-
-    // Posicionar Master
+    xPos += 20;
     masterTrack.setBounds(xPos, 15, trackWidth, 450);
 }
