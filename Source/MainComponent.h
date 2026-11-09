@@ -76,6 +76,7 @@ public:
     }
 
     bool keyPressed(const juce::KeyPress& key, juce::Component* originatingComponent) override {
+        // Ctrl + Z (Deshacer)
         if (key == juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0)) {
             if (undoManager.canUndo()) {
                 undoManager.undo();
@@ -83,6 +84,7 @@ public:
                 return true;
             }
         }
+        // Ctrl + Y o Ctrl + Shift + Z (Rehacer)
         else if (key == juce::KeyPress('y', juce::ModifierKeys::commandModifier, 0) ||
                  key == juce::KeyPress('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) {
             if (undoManager.canRedo()) {
@@ -90,6 +92,20 @@ public:
                 repaint();
                 return true;
             }
+        }
+        // Ctrl + S (Guardar Proyecto Rápido)
+        else if (key == juce::KeyPress('s', juce::ModifierKeys::commandModifier, 0)) {
+            fileChooser = std::make_unique<juce::FileChooser>("Guardar Sesión de La Pauta Studio",
+                                                              juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+                                                              "*.pauta");
+            fileChooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                [this](const juce::FileChooser& fc) {
+                    auto file = fc.getResult();
+                    if (file != juce::File{}) {
+                        ProjectManager::saveProject(file, tracks);
+                    }
+                });
+            return true;
         }
         return false;
     }
