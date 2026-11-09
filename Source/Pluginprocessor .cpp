@@ -68,7 +68,6 @@ bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layou
 }
 #endif
 
-// --- DEFINICIONES OBLIGATORIAS QUE FALTABAN ---
 void AudioPluginAudioProcessor::setTrackRecording(int trackIndex, bool shouldRecord)
 {
     if (trackIndex < 0 || trackIndex >= numTracks) return;
@@ -125,6 +124,48 @@ void AudioPluginAudioProcessor::stopRecordingTrack(int trackIndex)
     rec->backgroundThread.stopThread(2000);
 
     rec->writer.reset();
+}
+
+void AudioPluginAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    juce::XmlElement xml ("LAPAUTASTUDIOSTATE");
+    xml.setAttribute ("bpm", (double) currentBPM.load());
+    xml.setAttribute ("masterVol", (double) masterVolume.load());
+
+    for (int i = 0; i < numTracks; ++i)
+    {
+        auto* trackXml = xml.createNewChildElement ("TRACK");
+        trackXml->setAttribute ("index", i);
+        trackXml->setAttribute ("volume", (double) trackVolume[i].load());
+        trackXml->setAttribute ("pan", (double) trackPan[i].load());
+        trackXml->setAttribute ("mute", (bool) trackMute[i].load());
+        trackXml->setAttribute ("solo", (bool) trackSolo[i].load());
+    }
+
+    copyXmlToBinary (xml, destData);
+}
+
+void AudioPluginAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+
+    if (xmlState != nullptr && xmlState->hasTagName ("LAPAUTASTUDIOSTATE"))
+    {
+        currentBPM.store((float) xmlState->getDoubleAttribute ("bpm", 120.0));
+        masterVolume.store((float) xmlState->getDoubleAttribute ("masterVol", 0.9));
+
+        for (auto* trackXml : xmlState->getChildWithTagNameIterator ("TRACK"))
+        {
+            int i = trackXml->getIntAttribute ("index", -1);
+            if (i >= 0 && i < numTracks)
+            {
+                trackVolume[i].store((float) trackXml->getDoubleAttribute ("volume", 0.8));
+                trackPan[i].store((float) trackXml->getDoubleAttribute ("pan", 0.0));
+                trackMute[i].store(trackXml->getBoolAttribute ("mute", false));
+                trackSolo[i].store(trackXml->getBoolAttribute ("solo", false));
+            }
+        }
+    }
 }
 
 void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
@@ -222,8 +263,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
 
 bool AudioPluginAudioProcessor::hasEditor() const { return true; }
 juce::AudioProcessorEditor* AudioPluginAudioProcessor::createEditor() { return new AudioPluginAudioProcessorEditor (*this); }
-void AudioPluginAudioProcessor::getStateInformation (juce::MemoryBlock& destData) {}
-void AudioPluginAudioProcessor::setStateInformation (const void* data, int sizeInBytes) {}
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
