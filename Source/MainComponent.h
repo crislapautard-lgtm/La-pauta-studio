@@ -9,6 +9,7 @@
 #include "AudioEngine.h"
 #include "ProjectManager.h"
 #include "MixerPanelComponent.h"
+#include "AudioSettingsWindow.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::Button::Listener
@@ -41,6 +42,11 @@ public:
         openButton.addListener(this);
         addAndMakeVisible(openButton);
 
+        // Botón Configuración de Audio (Hardware / Tarjeta de sonido)
+        configButton.setButtonText("Config");
+        configButton.addListener(this);
+        addAndMakeVisible(configButton);
+
         // Botón Toggle Mixer Console
         toggleMixerButton.setButtonText("Mixer");
         toggleMixerButton.addListener(this);
@@ -51,7 +57,7 @@ public:
         mixerPanel = std::make_unique<MixerPanelComponent>(tracks);
         addChildComponent(mixerPanel.get());
 
-        setSize(950, 700);
+        setSize(1020, 700);
         setAudioChannels(2, 2);
         
         // Habilitar captura de teclado para atajos (Ctrl+Z / Ctrl+Y)
@@ -159,11 +165,13 @@ public:
     }
 
     void resized() override {
-        toggleMixerButton.setBounds(getWidth() - 450, 15, 75, 30);
-        openButton.setBounds(getWidth() - 365, 15, 75, 30);
-        saveButton.setBounds(getWidth() - 280, 15, 75, 30);
-        addTrackButton.setBounds(getWidth() - 195, 15, 80, 30);
-        playButton.setBounds(getWidth() - 105, 15, 90, 30);
+        // Barra superior de herramientas y controles ordenados de derecha a izquierda
+        playButton.setBounds(getWidth() - 95, 15, 80, 30);
+        addTrackButton.setBounds(getWidth() - 185, 15, 80, 30);
+        saveButton.setBounds(getWidth() - 270, 15, 75, 30);
+        openButton.setBounds(getWidth() - 355, 15, 75, 30);
+        configButton.setBounds(getWidth() - 440, 15, 75, 30);
+        toggleMixerButton.setBounds(getWidth() - 525, 15, 75, 30);
 
         int startY = 65;
         int trackHeight = 70;
@@ -224,6 +232,13 @@ public:
                     }
                 });
         }
+        else if (button == &configButton) {
+            // Abrir ventana flotante de ajustes de hardware de audio/MIDI
+            if (settingsWindow == nullptr) {
+                settingsWindow = std::make_unique<AudioSettingsWindow>(deviceManager);
+            }
+            settingsWindow->toFront(true);
+        }
         else if (button == &toggleMixerButton) {
             showMixer = toggleMixerButton.getToggleState();
             resized();
@@ -239,11 +254,13 @@ private:
     juce::TextButton addTrackButton;
     juce::TextButton saveButton;
     juce::TextButton openButton;
+    juce::TextButton configButton;
     juce::TextButton toggleMixerButton;
 
     std::unique_ptr<MixerPanelComponent> mixerPanel;
     bool showMixer = false;
 
+    std::unique_ptr<AudioSettingsWindow> settingsWindow;
     juce::UndoManager undoManager;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
