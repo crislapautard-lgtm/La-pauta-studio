@@ -15,10 +15,10 @@ private:
     struct Track { juce::String name; juce::AudioSampleBuffer buffer; bool muted=false; float volume=0.8f; int pos=0; bool hasAudio=false; juce::Colour color; };
     void play(); void stop(); void toggleRec(); void loadSample(); void loadFileIntoBuffer(juce::File, int);
     void scanVST3(); void saveProject(); void loadProject(); void addTrack(); void renderMix();
-    void toggleMetronome(); void openBeatMaker(); void openMixer();
+    void toggleMetronome(); void openBeatMaker(); void openMixer(); void openAudioSettings();
 
     juce::Label titleLabel, bpmLabel, statusLabel, eqLabel;
-    juce::TextButton playButton, stopButton, recButton, loadSampleButton, renderButton, scanButton, saveButton, loadButton, addTrackButton, metronomeButton, beatButton, mixerButton;
+    juce::TextButton playButton, stopButton, recButton, loadSampleButton, renderButton, scanButton, saveButton, loadButton, addTrackButton, metronomeButton, beatButton, mixerButton, audioSettingsButton;
     juce::Slider bpmSlider, masterSlider, eqLowSlider, eqMidSlider, eqHighSlider;
     juce::ComboBox trackSelector;
     juce::AudioFormatManager formatManager;
