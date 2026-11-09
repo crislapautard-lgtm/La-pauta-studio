@@ -68,6 +68,7 @@ bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layou
 }
 #endif
 
+// --- IMPLEMENTACIÓN QUE FALTABA (Resuelve LNK2019 de setTrackRecording) ---
 void AudioPluginAudioProcessor::setTrackRecording(int trackIndex, bool shouldRecord)
 {
     if (trackIndex < 0 || trackIndex >= numTracks) return;
@@ -83,6 +84,7 @@ void AudioPluginAudioProcessor::setTrackRecording(int trackIndex, bool shouldRec
     }
 }
 
+// --- IMPLEMENTACIÓN QUE FALTABA (Resuelve LNK2019 de setBPM) ---
 void AudioPluginAudioProcessor::setBPM(float bpm)
 {
     currentBPM.store(juce::jlimit(40.0f, 300.0f, bpm));
