@@ -18,8 +18,8 @@ MainComponent::MainComponent()
         trackComponents.push_back(std::move(trackComp));
     }
 
-    // Solicitamos los canales de audio por defecto (2 canales de salida estéreo)
-    setAudioChannels(0, 2);
+    // Solicitamos 2 canales de ENTRADA (micrófono) y 2 canales de SALIDA (estéreo)
+    setAudioChannels(2, 2);
 
     setSize (1000, 700);
 }
@@ -32,14 +32,15 @@ MainComponent::~MainComponent()
 
 void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRate)
 {
-    // Aquí puedes inicializar efectos o configuraciones dependientes del sampleRate
+    // Inicialización del sample rate para el motor o efectos
 }
 
 void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill)
 {
     juce::MidiBuffer incomingMidi;
     
-    // Llamamos a nuestro motor de audio para procesar las pistas lógicas en tiempo real
+    // NOTA: Para grabar, pasamos el buffer completo (que ahora contiene tanto la entrada 
+    // de hardware como el espacio para escribir la salida) hacia nuestro motor.
     audioEngine.processBlock (*bufferToFill.buffer, incomingMidi, tracks);
 }
 
@@ -52,6 +53,8 @@ void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff181818));
 }
+
+MainComponent::~MainComponent() // (Ojo: Asegúrate de mantener tu destructor limpio como arriba)
 
 void MainComponent::resized()
 {
