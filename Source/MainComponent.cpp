@@ -1,11 +1,5 @@
 #include "MainComponent.h"
 
-// ============================================================
-// LA PAUTA STUDIO
-// MainComponent.cpp - Correccion de compilacion
-// JUCE / C++
-// ============================================================
-
 MainComponent::MainComponent()
 {
     setSize(1280, 760);
@@ -31,15 +25,11 @@ MainComponent::MainComponent()
         tracks.add(t);
     }
 
-    // TITULO
     addAndMakeVisible(titleLabel);
-    titleLabel.setText("LA PAUTA STUDIO - TODO REAPER",
-                       juce::dontSendNotification);
+    titleLabel.setText("LA PAUTA STUDIO", juce::dontSendNotification);
     titleLabel.setFont(juce::Font(22.0f, juce::Font::bold));
-    titleLabel.setColour(juce::Label::textColourId,
-                         juce::Colours::white);
+    titleLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
-    // BOTONES PRINCIPALES
     addAndMakeVisible(playButton);
     playButton.setButtonText("PLAY");
 
@@ -94,7 +84,6 @@ MainComponent::MainComponent()
     addAndMakeVisible(soloButton);
     soloButton.setButtonText("SOLO");
 
-    // ACCIONES
     playButton.onClick = [this] { play(); };
     stopButton.onClick = [this] { stop(); };
     recButton.onClick = [this] { toggleRec(); };
@@ -123,11 +112,8 @@ MainComponent::MainComponent()
 
             if (b.getNumSamples() > 0)
             {
-                b.setSize(b.getNumChannels(),
-                         b.getNumSamples() / 2);
-
-                statusLabel.setText("Cortado",
-                                    juce::dontSendNotification);
+                b.setSize(b.getNumChannels(), b.getNumSamples() / 2);
+                statusLabel.setText("Cortado", juce::dontSendNotification);
             }
         }
     };
@@ -138,10 +124,7 @@ MainComponent::MainComponent()
         {
             auto& t = tracks.getReference(selectedTrack);
             t.muted = !t.muted;
-
-            statusLabel.setText(
-                t.name + (t.muted ? " MUTED" : " SONANDO"),
-                juce::dontSendNotification);
+            statusLabel.setText(t.name + (t.muted ? " MUTED" : " SONANDO"), juce::dontSendNotification);
         }
     };
 
@@ -153,167 +136,115 @@ MainComponent::MainComponent()
                 t.muted = true;
 
             tracks.getReference(selectedTrack).muted = false;
-
-            statusLabel.setText(
-                "SOLO en " + tracks[selectedTrack].name,
-                juce::dontSendNotification);
+            statusLabel.setText("SOLO en " + tracks[selectedTrack].name, juce::dontSendNotification);
         }
     };
 
-    // ESTADO
     addAndMakeVisible(statusLabel);
-    statusLabel.setText("LA PAUTA STUDIO - Listo",
-                        juce::dontSendNotification);
-    statusLabel.setColour(juce::Label::textColourId,
-                          juce::Colours::white);
+    statusLabel.setText("LA PAUTA STUDIO - Listo", juce::dontSendNotification);
+    statusLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
-    // BPM
     addAndMakeVisible(bpmLabel);
     bpmLabel.setText("BPM", juce::dontSendNotification);
-    bpmLabel.setColour(juce::Label::textColourId,
-                       juce::Colours::white);
+    bpmLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
     addAndMakeVisible(bpmSlider);
     bpmSlider.setRange(60, 200, 1);
     bpmSlider.setValue(95);
+    bpmSlider.onValueChange = [this] { bpm = (int)bpmSlider.getValue(); };
 
-    bpmSlider.onValueChange = [this]
-    {
-        bpm = (int)bpmSlider.getValue();
-    };
-
-    // MASTER
     addAndMakeVisible(masterSlider);
     masterSlider.setRange(0, 1, 0.01);
     masterSlider.setValue(0.8);
 
-    // SELECTOR DE PISTAS
     addAndMakeVisible(trackSelector);
-
     for (int i = 0; i < tracks.size(); ++i)
         trackSelector.addItem(tracks[i].name, i + 1);
 
     trackSelector.setSelectedId(1);
+    trackSelector.onChange = [this] { selectedTrack = trackSelector.getSelectedId() - 1; };
 
-    trackSelector.onChange = [this]
-    {
-        selectedTrack = trackSelector.getSelectedId() - 1;
-    };
-
-    // EQ
     addAndMakeVisible(eqLabel);
     eqLabel.setText("EQ", juce::dontSendNotification);
-    eqLabel.setColour(juce::Label::textColourId,
-                      juce::Colours::white);
+    eqLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
     addAndMakeVisible(eqLowSlider);
     eqLowSlider.setRange(-12, 12, 0.1);
     eqLowSlider.setValue(0);
-    eqLowSlider.onValueChange = [this]
-    {
-        eqLow = (float)eqLowSlider.getValue();
-    };
+    eqLowSlider.onValueChange = [this] { eqLow = (float)eqLowSlider.getValue(); };
 
     addAndMakeVisible(eqMidSlider);
     eqMidSlider.setRange(-12, 12, 0.1);
     eqMidSlider.setValue(0);
-    eqMidSlider.onValueChange = [this]
-    {
-        eqMid = (float)eqMidSlider.getValue();
-    };
+    eqMidSlider.onValueChange = [this] { eqMid = (float)eqMidSlider.getValue(); };
 
     addAndMakeVisible(eqHighSlider);
     eqHighSlider.setRange(-12, 12, 0.1);
     eqHighSlider.setValue(0);
-    eqHighSlider.onValueChange = [this]
-    {
-        eqHigh = (float)eqHighSlider.getValue();
-    };
+    eqHighSlider.onValueChange = [this] { eqHigh = (float)eqHighSlider.getValue(); };
 
-    // EFECTOS
     addAndMakeVisible(fxLabel);
-    fxLabel.setText("FX: REV / DLY / COMP",
-                    juce::dontSendNotification);
-    fxLabel.setColour(juce::Label::textColourId,
-                      juce::Colours::white);
+    fxLabel.setText("FX: REV / DLY / COMP", juce::dontSendNotification);
+    fxLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
     addAndMakeVisible(reverbSlider);
     reverbSlider.setRange(0, 1, 0.01);
     reverbSlider.setValue(0);
-
     reverbSlider.onValueChange = [this]
     {
         if (selectedTrack >= 0 && selectedTrack < tracks.size())
-            tracks.getReference(selectedTrack).reverb =
-                (float)reverbSlider.getValue();
+            tracks.getReference(selectedTrack).reverb = (float)reverbSlider.getValue();
     };
 
     addAndMakeVisible(delaySlider);
     delaySlider.setRange(0, 1, 0.01);
     delaySlider.setValue(0);
-
     delaySlider.onValueChange = [this]
     {
         if (selectedTrack >= 0 && selectedTrack < tracks.size())
-            tracks.getReference(selectedTrack).delay =
-                (float)delaySlider.getValue();
+            tracks.getReference(selectedTrack).delay = (float)delaySlider.getValue();
     };
 
     addAndMakeVisible(compSlider);
     compSlider.setRange(0, 1, 0.01);
     compSlider.setValue(0);
-
     compSlider.onValueChange = [this]
     {
         if (selectedTrack >= 0 && selectedTrack < tracks.size())
-            tracks.getReference(selectedTrack).comp =
-                (float)compSlider.getValue();
+            tracks.getReference(selectedTrack).comp = (float)compSlider.getValue();
     };
 
-    // AUTOMATIZACION Y VOLUMEN
     addAndMakeVisible(autoLabel);
-    autoLabel.setText("AUTO VOL / PAN / VOL PISTA",
-                      juce::dontSendNotification);
-    autoLabel.setColour(juce::Label::textColourId,
-                        juce::Colours::white);
+    autoLabel.setText("AUTO VOL / PAN / VOL PISTA", juce::dontSendNotification);
+    autoLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
     addAndMakeVisible(autoSlider);
     autoSlider.setRange(0, 1, 0.01);
     autoSlider.setValue(1);
-
     autoSlider.onValueChange = [this]
     {
         if (selectedTrack >= 0 && selectedTrack < tracks.size())
-            tracks.getReference(selectedTrack).autoVol =
-                (float)autoSlider.getValue();
+            tracks.getReference(selectedTrack).autoVol = (float)autoSlider.getValue();
     };
 
     addAndMakeVisible(volSlider);
     volSlider.setRange(0, 1, 0.01);
     volSlider.setValue(0.8);
-
     volSlider.onValueChange = [this]
     {
         if (selectedTrack >= 0 && selectedTrack < tracks.size())
-            tracks.getReference(selectedTrack).volume =
-                (float)volSlider.getValue();
+            tracks.getReference(selectedTrack).volume = (float)volSlider.getValue();
     };
 
     addAndMakeVisible(panSlider);
     panSlider.setRange(-1, 1, 0.01);
     panSlider.setValue(0);
-
     panSlider.onValueChange = [this]
     {
         if (selectedTrack >= 0 && selectedTrack < tracks.size())
-            tracks.getReference(selectedTrack).pan =
-                (float)panSlider.getValue();
+            tracks.getReference(selectedTrack).pan = (float)panSlider.getValue();
     };
 }
-
-// ============================================================
-// DESTRUCTOR
-// ============================================================
 
 MainComponent::~MainComponent()
 {
@@ -321,18 +252,13 @@ MainComponent::~MainComponent()
     shutdownAudio();
 }
 
-// ============================================================
-// AUDIO COMPONENT METHODS (Overrides obligatorios)
-// ============================================================
-
 void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
-    // Inicialización del audio si es necesaria
+    currentSampleRate = sampleRate;
 }
 
 void MainComponent::releaseResources()
 {
-    // Liberación de recursos de audio
 }
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
@@ -340,18 +266,10 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     bufferToFill.clearActiveBufferRegion();
 }
 
-// ============================================================
-// TIMER
-// ============================================================
-
 void MainComponent::timerCallback()
 {
     repaint();
 }
-
-// ============================================================
-// PLAY / STOP
-// ============================================================
 
 void MainComponent::play()
 {
@@ -367,10 +285,6 @@ void MainComponent::stop()
     isPlaying = false;
 }
 
-// ============================================================
-// PISTAS
-// ============================================================
-
 void MainComponent::addTrack()
 {
     Track t;
@@ -381,69 +295,39 @@ void MainComponent::addTrack()
     trackSelector.addItem(t.name, tracks.size());
 }
 
-// ============================================================
-// METRONOMO
-// ============================================================
-
 void MainComponent::toggleMetronome()
 {
     metronomeOn = !metronomeOn;
-    statusLabel.setText(
-        metronomeOn ? "Metronomo activado" : "Metronomo apagado",
-        juce::dontSendNotification);
+    statusLabel.setText(metronomeOn ? "Metronomo activado" : "Metronomo apagado", juce::dontSendNotification);
 }
-
-// ============================================================
-// BEAT MAKER
-// ============================================================
 
 void MainComponent::openBeatMaker()
 {
     juce::AlertWindow::showMessageBoxAsync(
         juce::AlertWindow::InfoIcon,
         "BEAT MAKER",
-        "DEMBOW: Kick-Kick-Snare\n"
-        "TRAP: 808 + HiHat\n"
-        "DRILL: 808 deslizado + Snare",
+        "DEMBOW: Kick-Kick-Snare\nTRAP: 808 + HiHat\nDRILL: 808 deslizado + Snare",
         "DALE");
 }
-
-// ============================================================
-// MIXER
-// ============================================================
 
 void MainComponent::openMixer()
 {
     juce::String m;
-
     for (auto& t : tracks)
     {
         m += t.name
             + " Vol " + juce::String((int)(t.volume * 100)) + "%"
             + " Pan " + juce::String((int)(t.pan * 100))
-            + " REV " + juce::String((int)(t.reverb * 100)) + "%"
-            + " "
-            + (t.muted ? "MUTE" : "ON")
-            + "\n";
+            + " REV " + juce::String((int)(t.reverb * 100)) + "% "
+            + (t.muted ? "MUTE" : "ON") + "\n";
     }
 
-    juce::AlertWindow::showMessageBoxAsync(
-        juce::AlertWindow::InfoIcon,
-        "MIXER",
-        m,
-        "OK");
+    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "MIXER", m, "OK");
 }
-
-// ============================================================
-// AUDIO SETTINGS
-// ============================================================
 
 void MainComponent::openAudioSettings()
 {
-    auto* s = new juce::AudioDeviceSelectorComponent(
-        deviceManager, 0, 2, 0, 2,
-        false, false, true, false);
-
+    auto* s = new juce::AudioDeviceSelectorComponent(deviceManager, 0, 2, 0, 2, false, false, true, false);
     s->setSize(600, 500);
 
     juce::DialogWindow::LaunchOptions o;
@@ -455,45 +339,29 @@ void MainComponent::openAudioSettings()
     o.launchAsync();
 }
 
-// ============================================================
-// PIANO ROLL
-// ============================================================
-
 void MainComponent::openPianoRoll()
 {
     MidiNote n;
     n.note = 60 + (int)(midiNotes.size() % 12);
     n.start = playhead;
-
     midiNotes.add(n);
 
-    juce::AlertWindow::showMessageBoxAsync(
-        juce::AlertWindow::InfoIcon,
-        "PIANO ROLL",
-        "Notas MIDI: " + juce::String(midiNotes.size()),
-        "OK");
+    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "PIANO ROLL", "Notas MIDI: " + juce::String(midiNotes.size()), "OK");
 }
-
-// ============================================================
-// EDICION DE CLIPS
-// ============================================================
 
 void MainComponent::mouseDown(const juce::MouseEvent& e)
 {
     int y = 170;
-
     for (int i = 0; i < tracks.size(); ++i)
     {
         if (e.y >= y && e.y < y + 60)
         {
             selectedTrack = i;
             trackSelector.setSelectedId(i + 1);
-
             dragStartX = e.x;
             dragTrack = i;
             break;
         }
-
         y += 65;
     }
 }
@@ -502,17 +370,11 @@ void MainComponent::mouseDrag(const juce::MouseEvent& e)
 {
     if (dragTrack >= 0 && dragTrack < tracks.size())
     {
-        tracks.getReference(dragTrack).clipOffset +=
-            (e.x - dragStartX) / 10;
-
+        tracks.getReference(dragTrack).clipOffset += (e.x - dragStartX) / 10;
         dragStartX = e.x;
         repaint();
     }
 }
-
-// ============================================================
-// GRABACION
-// ============================================================
 
 void MainComponent::toggleRec()
 {
@@ -521,36 +383,23 @@ void MainComponent::toggleRec()
 
     if (!isRecording)
     {
-        auto d = juce::File::getSpecialLocation(
-            juce::File::userDocumentsDirectory);
-
+        auto d = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
         juce::File f = d.getChildFile("LaPauta_Voz.wav");
 
         if (f.exists())
             f.deleteFile();
 
         juce::WavAudioFormat wav;
-
         if (auto s = f.createOutputStream())
         {
-            writer.reset(wav.createWriterFor(
-                s.release(),
-                getSampleRate(),
-                2,
-                16,
-                {},
-                0));
+            writer.reset(wav.createWriterFor(s.release(), currentSampleRate, 2, 16, {}, 0));
 
             if (writer != nullptr)
             {
                 isRecording = true;
                 isPlaying = false;
-
                 recButton.setButtonText("PARAR");
-
-                statusLabel.setText(
-                    "GRABANDO: " + tracks[selectedTrack].name,
-                    juce::dontSendNotification);
+                statusLabel.setText("GRABANDO: " + tracks[selectedTrack].name, juce::dontSendNotification);
             }
         }
     }
@@ -558,55 +407,36 @@ void MainComponent::toggleRec()
     {
         isRecording = false;
         writer.reset();
-
         recButton.setButtonText("REC");
 
         loadFileIntoBuffer(
-            juce::File::getSpecialLocation(
-                juce::File::userDocumentsDirectory)
-                .getChildFile("LaPauta_Voz.wav"),
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("LaPauta_Voz.wav"),
             selectedTrack);
 
-        statusLabel.setText(
-            "Archivo guardado",
-            juce::dontSendNotification);
+        statusLabel.setText("Archivo guardado", juce::dontSendNotification);
     }
 }
-
-// ============================================================
-// CARGAR SAMPLE
-// ============================================================
 
 void MainComponent::loadSample()
 {
     fileChooser = std::make_unique<juce::FileChooser>(
         "Elige sample",
-        juce::File::getSpecialLocation(
-            juce::File::userDocumentsDirectory),
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
         "*.wav;*.mp3;*.aif;*.flac");
 
     fileChooser->launchAsync(
-        juce::FileBrowserComponent::openMode |
-        juce::FileBrowserComponent::canSelectFiles,
+        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
         [this](const juce::FileChooser& fc)
         {
             auto file = fc.getResult();
-
             if (file.exists())
             {
                 currentSampleFile = file;
                 loadFileIntoBuffer(file, selectedTrack);
-
-                statusLabel.setText(
-                    "Sample cargado",
-                    juce::dontSendNotification);
+                statusLabel.setText("Sample cargado", juce::dontSendNotification);
             }
         });
 }
-
-// ============================================================
-// CARGAR ARCHIVO EN PISTA
-// ============================================================
 
 void MainComponent::loadFileIntoBuffer(juce::File file, int idx)
 {
@@ -616,18 +446,8 @@ void MainComponent::loadFileIntoBuffer(juce::File file, int idx)
     if (auto* r = formatManager.createReaderFor(file))
     {
         auto& buffer = tracks.getReference(idx).buffer;
-
-        buffer.setSize(
-            (int)r->numChannels,
-            (int)r->lengthInSamples);
-
-        r->read(
-            &buffer,
-            0,
-            (int)r->lengthInSamples,
-            0,
-            true,
-            true);
+        buffer.setSize((int)r->numChannels, (int)r->lengthInSamples);
+        r->read(&buffer, 0, (int)r->lengthInSamples, 0, true, true);
 
         tracks.getReference(idx).hasAudio = true;
         tracks.getReference(idx).pos = 0;
@@ -636,10 +456,6 @@ void MainComponent::loadFileIntoBuffer(juce::File file, int idx)
     }
 }
 
-// ============================================================
-// BUSCAR VST3 Y JSFX
-// ============================================================
-
 void MainComponent::scanVST3()
 {
     foundPlugins.clear();
@@ -647,31 +463,18 @@ void MainComponent::scanVST3()
     foundJSFX.clear();
 
     juce::KnownPluginList list;
-
-    juce::FileSearchPath vst3Path(
-        "C:\\Program Files\\Common Files\\VST3;"
-        "C:\\Program Files\\VSTPlugins");
+    juce::FileSearchPath vst3Path("C:\\Program Files\\Common Files\\VST3;C:\\Program Files\\VSTPlugins");
 
     for (auto* fmt : pluginManager.getFormats())
     {
-        juce::PluginDirectoryScanner scanner(
-            list,
-            *fmt,
-            vst3Path,
-            true,
-            juce::File());
-
+        juce::PluginDirectoryScanner scanner(list, *fmt, vst3Path, true, juce::File());
         juce::String pluginBeingScanned;
-
-        while (scanner.scanNextFile(true, pluginBeingScanned))
-        {
-        }
+        while (scanner.scanNextFile(true, pluginBeingScanned)) {}
     }
 
     for (int i = 0; i < list.getNumTypes(); ++i)
     {
         auto* desc = list.getType(i);
-
         if (desc != nullptr)
         {
             pluginDescs.add(*desc);
@@ -680,84 +483,64 @@ void MainComponent::scanVST3()
     }
 
     juce::StringArray jsfxFolders;
-
     jsfxFolders.add("C:\\Program Files\\REAPER\\Effects");
-
-    jsfxFolders.add(
-        juce::File::getSpecialLocation(
-            juce::File::userApplicationDataDirectory)
-            .getChildFile("REAPER\\Effects")
-            .getFullPathName());
-
-    jsfxFolders.add(
-        juce::File::getSpecialLocation(
-            juce::File::userDocumentsDirectory)
-            .getChildFile("REAPER\\Effects")
-            .getFullPathName());
+    jsfxFolders.add(juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("REAPER\\Effects").getFullPathName());
+    jsfxFolders.add(juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("REAPER\\Effects").getFullPathName());
 
     for (auto& f : jsfxFolders)
     {
         juce::File folder(f);
-
         if (folder.exists())
         {
-            auto files = folder.findChildFiles(
-                juce::File::findFiles,
-                true,
-                "*.jsfx");
-
+            auto files = folder.findChildFiles(juce::File::findFiles, true, "*.jsfx");
             for (auto& file : files)
                 foundJSFX.add(file.getFileNameWithoutExtension());
         }
     }
 
-    juce::String r =
-        "VST3: " + juce::String(foundPlugins.size()) + " encontrados\n";
-
-    for (auto& n : foundPlugins)
-        r += " - " + n + "\n";
+    juce::String r = "VST3: " + juce::String(foundPlugins.size()) + " encontrados\n";
+    for (auto& n : foundPlugins) r += " - " + n + "\n";
 
     r += "\nJSFX: " + juce::String(foundJSFX.size()) + " encontrados\n";
+    for (auto& n : foundJSFX) r += " - " + n + "\n";
 
-    for (auto& n : foundJSFX)
-        r += " - " + n + "\n";
-
-    juce::AlertWindow::showMessageBoxAsync(
-        juce::AlertWindow::InfoIcon,
-        "SCAN VST3 + JSFX",
-        r,
-        "OK");
+    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "SCAN VST3 + JSFX", r, "OK");
 }
-
-// ============================================================
-// ABRIR VST3
-// ============================================================
 
 void MainComponent::openVST()
 {
     if (pluginDescs.isEmpty())
     {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::InfoIcon,
-            "VST",
-            "Ejecuta SCAN VST3 primero",
-            "OK");
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "VST", "Ejecuta SCAN VST3 primero", "OK");
         return;
     }
 
     juce::String err;
-    double currentSampleRate = getSampleRate();
 
     for (auto& desc : pluginDescs)
     {
-        auto inst = pluginManager.createPluginInstance(
-            desc,
-            currentSampleRate,
-            512,
-            err);
+        auto inst = pluginManager.createPluginInstance(desc, currentSampleRate, 512, err);
 
         if (inst != nullptr)
         {
             pluginInstance.reset(inst.release());
+            pluginInstance->prepareToPlay(currentSampleRate, 512);
 
-            p
+            if (pluginInstance->hasEditor())
+            {
+                pluginEditor.reset(pluginInstance->createEditor());
+
+                if (pluginEditor != nullptr)
+                {
+                    juce::DialogWindow::LaunchOptions o;
+                    o.content.setOwned(pluginEditor.release());
+                    o.dialogTitle = "VST: " + desc.name;
+                    o.escapeKeyTriggersCloseButton = true;
+                    o.useNativeTitleBar = true;
+                    o.resizable = true;
+                    o.launchAsync();
+                }
+            }
+        }
+    }
+}
