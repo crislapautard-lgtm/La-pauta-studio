@@ -2,7 +2,6 @@
 
 MainComponent::MainComponent(AudioPluginAudioProcessor& p) : audioProcessor(p)
 {
-    // Creamos las 16 pistas vocales/instrumentales
     for (int i = 0; i < AudioPluginAudioProcessor::numTracks; ++i)
     {
         auto trackName = "Vocal " + juce::String(i + 1);
@@ -18,11 +17,9 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p) : audioProcessor(p)
         tracks.push_back(std::move(trackComp));
     }
 
-    // Configuración del Master
     masterTrack.onVolumeChanged = [this](float val) { audioProcessor.masterVolume.store(val); };
     trackContainer.addAndMakeVisible(masterTrack);
 
-    // Configuramos el viewport para desplazamiento horizontal fluido
     viewport.setViewedComponent(&trackContainer, false);
     viewport.setScrollBarsShown(true, true);
     addAndMakeVisible(viewport);
@@ -43,7 +40,7 @@ void MainComponent::resized()
 
     int trackWidth = 120;
     int spacing = 10;
-    int totalWidth = (AudioPluginAudioProcessor::numTracks * (trackWidth + spacing)) + trackWidth + 40; // 16 pistas + Master
+    int totalWidth = (AudioPluginAudioProcessor::numTracks * (trackWidth + spacing)) + trackWidth + 40;
 
     trackContainer.setBounds(0, 0, totalWidth, getHeight() - 20);
 
@@ -54,7 +51,6 @@ void MainComponent::resized()
         xPos += trackWidth + spacing;
     }
 
-    // Separador visual y colocación del fader Master al final del scroll
     xPos += 20;
     masterTrack.setBounds(xPos, 15, trackWidth, 450);
 }
