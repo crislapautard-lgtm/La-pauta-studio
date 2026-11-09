@@ -2,7 +2,6 @@
 
 #include <JuceHeader.h>
 
-// Estructura para representar una pista de audio
 struct Track
 {
     juce::String name;
@@ -20,7 +19,6 @@ struct Track
     int clipOffset = 0;
 };
 
-// Estructura para notas MIDI del Piano Roll
 struct MidiNote
 {
     int note = 60;
@@ -37,7 +35,6 @@ public:
     void paint(juce::Graphics&) override {}
     void resized() override {}
 
-    // Funciones obligatorias de AudioAppComponent
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
     void releaseResources() override;
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override;
@@ -72,12 +69,13 @@ private:
     juce::AudioPluginFormatManager pluginManager;
     std::unique_ptr<juce::AudioFormatWriter> writer;
 
-    juce::Array<Track> tracks; // Cambiado a Array por valor para evitar problemas de OwnedArray
+    juce::Array<Track> tracks;
     juce::Array<MidiNote> midiNotes;
 
     int selectedTrack = 0;
     int bpm = 95;
     int playhead = 0;
+    double currentSampleRate = 44100.0; // Almacena la frecuencia de muestreo actual de forma segura
     bool isPlaying = false;
     bool isRecording = false;
     bool metronomeOn = false;
@@ -99,7 +97,6 @@ private:
     std::unique_ptr<juce::AudioPluginInstance> pluginInstance;
     std::unique_ptr<juce::AudioProcessorEditor> pluginEditor;
 
-    // Componentes de Interfaz
     juce::Label titleLabel, statusLabel, bpmLabel, eqLabel, fxLabel, autoLabel;
     juce::TextButton playButton, stopButton, recButton, loadSampleButton, renderButton;
     juce::TextButton scanButton, vstButton, saveButton, loadButton, addTrackButton;
