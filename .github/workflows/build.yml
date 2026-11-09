@@ -14,9 +14,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Install NSIS
-        run: choco install nsis -y
-
-      - name: Build Installer
-        run: makensis installer.nsi
+      - name: Build Installer with Inno Setup
+        run: iscc installer.iss
         
