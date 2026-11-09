@@ -322,6 +322,25 @@ MainComponent::~MainComponent()
 }
 
 // ============================================================
+// AUDIO COMPONENT METHODS (Overrides obligatorios)
+// ============================================================
+
+void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
+{
+    // Inicialización del audio si es necesaria
+}
+
+void MainComponent::releaseResources()
+{
+    // Liberación de recursos de audio
+}
+
+void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
+{
+    bufferToFill.clearActiveBufferRegion();
+}
+
+// ============================================================
 // TIMER
 // ============================================================
 
@@ -516,7 +535,7 @@ void MainComponent::toggleRec()
         {
             writer.reset(wav.createWriterFor(
                 s.release(),
-                sampleRate,
+                getSampleRate(),
                 2,
                 16,
                 {},
@@ -727,12 +746,13 @@ void MainComponent::openVST()
     }
 
     juce::String err;
+    double currentSampleRate = getSampleRate();
 
     for (auto& desc : pluginDescs)
     {
         auto inst = pluginManager.createPluginInstance(
             desc,
-            sampleRate,
+            currentSampleRate,
             512,
             err);
 
@@ -740,19 +760,4 @@ void MainComponent::openVST()
         {
             pluginInstance.reset(inst.release());
 
-            pluginInstance->prepareToPlay(sampleRate, 512);
-
-            if (pluginInstance->hasEditor())
-            {
-                pluginEditor.reset(pluginInstance->createEditor());
-
-                if (pluginEditor != nullptr)
-                {
-                    juce::DialogWindow::LaunchOptions o;
-
-                    o.content.setOwned(pluginEditor.release());
-                    o.dialogTitle = "VST: " + desc.name;
-                    o.escapeKeyTriggersCloseButton = true;
-                    o.useNativeTitleBar = true;
-                    o.resizable = true;
-                    o.launchAsy
+            p
