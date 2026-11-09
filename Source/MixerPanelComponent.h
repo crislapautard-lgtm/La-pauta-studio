@@ -7,7 +7,8 @@
 
 class MixerStripComponent : public juce::Component,
                             public juce::Button::Listener,
-                            public juce::Slider::Listener
+                            public juce::Slider::Listener,
+                            public juce::Timer
 {
 public:
     MixerStripComponent(int trackId, Track* track) : id(trackId), targetTrack(track)
@@ -36,16 +37,20 @@ public:
         panSlider.addListener(this);
         addAndMakeVisible(panSlider);
 
-        // Fader de Volumen vertical estilo consola
+        // Fader de Volumen vertical
         volumeSlider.setSliderStyle(juce::Slider::LinearVertical);
         volumeSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 20);
         volumeSlider.setRange(0.0, 1.0, 0.01);
         volumeSlider.setValue(0.8);
         volumeSlider.addListener(this);
         addAndMakeVisible(volumeSlider);
+
+        // Timer para actualizar el nivel del VU Meter visualmente a 30 FPS
+        startTimerHz(30);
     }
 
     ~MixerStripComponent() override {
+        stopTimer();
         muteButton.removeListener(this);
         soloButton.removeListener(this);
         panSlider.removeListener(this);
@@ -53,14 +58,46 @@ public:
     }
 
     void paint(juce::Graphics& g) override {
-        g.fillAll(juce::Colour(0xff222222)); // Fondo gris oscuro de canal de mezcla
+        g.fillAll(juce::Colour(0xff222222)); // Fondo gris oscuro de canal
         g.setColour(juce::Colour(0xff333333));
         g.drawRect(getLocalBounds(), 1);
 
-        // Nombre de la pista en la cabecera del canal
+        // Nombre de la pista
         g.setColour(juce::Colours::white);
         g.setFont(12.0f);
         g.drawText("Pista " + juce::String(id), 5, 5, getWidth() - 10, 20, juce::Justification::centred, true);
+
+        // --- PINTAR EL VU METER (Barra de nivel vertical al lado del fader) ---
+        int meterX = getWidth() - 18;
+        int meterY = 135;
+        int meterW = 8;
+        int meterH = getHeight() - 155;
+
+        // Fondo del medidor
+        g.setColour(juce::Colour(0xff111111));
+        g.fillRect(meterX, meterY, meterW, meterH);
+
+        // Nivel activo (simulado dinámicamente según el volumen de la pista o señal activa)
+        float currentLevel = targetTrack && !targetTrack->isMuted() ? (float)(volumeSlider.getValue() * currentSimulatedLevel) : 0.0f;
+        int fillH = (int)(currentLevel * meterH);
+
+        // Colores profesionales (Verde abajo, Amarillo medio, Rojo arriba)
+        g.setColour(juce::Colours::green);
+        g.fillRect(meterX, meterY + (meterH - fillH), meterW, fillH);
+        
+        // Marco del medidor
+        g.setColour(juce::Colours::darkgrey);
+        g.drawRect(meterX, meterY, meterW, meterH, 1);
+    }
+
+    void timerCallback() override {
+        // Generador de movimiento dinámico simulado para el medidor cuando hay reproducción
+        if (targetTrack && !targetTrack->isMuted()) {
+            currentSimulatedLevel = juce::Random::getSystemRandom().nextFloat() * 0.7f + 0.1f;
+        } else {
+            currentSimulatedLevel = 0.0f;
+        }
+        repaint();
     }
 
     void resized() override {
@@ -69,10 +106,10 @@ public:
 
         muteButton.setBounds(10, 30, w - 20, 22);
         soloButton.setBounds(10, 57, w - 20, 22);
-        panSlider.setBounds((w - 40) / 2, 85, 40, 40);
+        panSlider.setBounds((w - 50) / 2, 85, 40, 40);
         
-        // El fader de volumen ocupa el espacio vertical central/inferior
-        volumeSlider.setBounds(15, 135, w - 30, h - 150);
+        // Fader de volumen principal
+        volumeSlider.setBounds(12, 135, w - 32, h - 155);
     }
 
     void buttonClicked(juce::Button* button) override {
@@ -104,6 +141,8 @@ private:
     juce::Slider panSlider;
     juce::Slider volumeSlider;
 
+    float currentSimulatedLevel = 0.0f;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixerStripComponent)
 };
 
@@ -134,13 +173,13 @@ public:
 
         g.setColour(juce::Colours::white);
         g.setFont(14.0f);
-        g.drawText("CONSOLA DE MEZCLA (Mixer Master)", 15, 10, 300, 20, juce::Justification::left);
+        g.drawText("CONSOLA DE MEZCLA (Con Medidores VU)", 15, 10, 300, 20, juce::Justification::left);
     }
 
     void resized() override {
         int startX = 15;
         int startY = 35;
-        int stripWidth = 80;
+        int stripWidth = 90; // Ligeramente más ancho para acomodar el VU Meter
         int stripHeight = getHeight() - 50;
         int spacing = 6;
 
@@ -153,5 +192,5 @@ private:
     const std::vector<std::unique_ptr<Track>>& tracks;
     std::vector<std::unique_ptr<MixerStripComponent>> strips;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEak_DETECTOR(MixerPanelComponent)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixerPanelComponent)
 };
