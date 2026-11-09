@@ -13,6 +13,13 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                        )
 #endif
 {
+    for (int i = 0; i < numTracks; ++i) {
+        trackVolume[i].store(0.8f);
+        trackPan[i].store(0.0f);
+        trackMute[i].store(false);
+        trackSolo[i].store(false);
+        trackRec[i].store(false);
+    }
 }
 
 AudioPluginAudioProcessor::~AudioPluginAudioProcessor() {}
@@ -51,7 +58,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
 
     float masterVol = masterVolume.load();
 
-    // Aplicamos ganancia general del Master a las muestras de salida
     if (totalNumInputChannels >= 2)
     {
         auto* left  = buffer.getWritePointer (0);
@@ -59,7 +65,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
 
         for (int i = 0; i < buffer.getNumSamples(); ++i)
         {
-            // Simulamos el procesamiento básico combinado de las pistas activas
             float sumL = 0.0f;
             float sumR = 0.0f;
 
