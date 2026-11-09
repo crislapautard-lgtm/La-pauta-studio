@@ -9,4 +9,4 @@ Compression=lzma
 SolidCompression=yes
 
 [Files]
-Source: "Source\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+Source: "OutputFiles\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
