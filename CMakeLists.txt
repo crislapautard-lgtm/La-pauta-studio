@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(La-Pauta-Studio VERSION 0.0.1)
 
-# Agregamos JUCE como subdirectorio local para que CMake lo encuentre siempre
+# Incluir JUCE desde la carpeta descargada
 add_subdirectory(JUCE)
 
 juce_add_plugin(La-Pauta-Studio
@@ -12,14 +12,15 @@ juce_add_plugin(La-Pauta-Studio
     PRODUCT_NAME "La Pauta Studio"
 )
 
+# Archivos del proyecto (ajustados a la raíz para evitar errores de ruta)
 target_sources(La-Pauta-Studio
     PRIVATE
-        Source/PluginProcessor.h
-        Source/PluginProcessor.cpp
-        Source/MainComponent.h
-        Source/MainComponent.cpp
-        Source/TrackComponent.h
-        Source/TrackComponent.cpp
+        PluginProcessor.h
+        PluginProcessor.cpp
+        MainComponent.h
+        MainComponent.cpp
+        TrackComponent.h
+        TrackComponent.cpp
 )
 
 target_compile_definitions(La-Pauta-Studio
@@ -40,6 +41,5 @@ target_link_libraries(La-Pauta-Studio
         juce::juce_gui_extra
     PUBLIC
         juce::juce_recommended_config_flags
-        juce::juce_recommended_lTO_flags
         juce::juce_recommended_warning_flags
 )
