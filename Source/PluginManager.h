@@ -2,44 +2,39 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <functional>
 
 // ============================================================
 // LA PAUTA STUDIO
-// PLUGIN MANAGER
-// VST3 HOST - 64 BITS
-// JUCE 9.0.5
+// VST3 PLUGIN MANAGER - WINDOWS x64
+// ESCANEO EN SEGUNDO PLANO
 // ============================================================
 
-class PluginManager
+class PluginManager : private juce::Thread
 {
 public:
-
     PluginManager();
+    ~PluginManager() override;
 
-    ~PluginManager();
+    void scanPluginsAsync(std::function<void()> onFinished);
 
-    // Escaneo de plugins
-    void scanPlugins();
+    bool isScanning() const;
 
-    // Lista de plugins encontrados
     const juce::KnownPluginList& getKnownPlugins() const;
 
-    // Cantidad de plugins
     int getNumPlugins() const;
 
-    // Nombre de plugin
     juce::String getPluginName(int index) const;
 
-    // Acceso al administrador de formatos
     juce::AudioPluginFormatManager& getFormatManager();
 
 private:
+    void run() override;
 
     juce::AudioPluginFormatManager formatManager;
-
     juce::KnownPluginList knownPlugins;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(
-        PluginManager
-    )
+    std::function<void()> scanFinishedCallback;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginManager)
 };
