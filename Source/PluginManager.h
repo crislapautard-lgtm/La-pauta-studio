@@ -2,8 +2,6 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include <memory>
-#include <vector>
 
 // ============================================================
 // LA PAUTA STUDIO
@@ -15,86 +13,21 @@ class PluginManager
 {
 public:
 
-    PluginManager()
-    {
-        formatManager.addDefaultFormats();
-    }
+    PluginManager();
+    ~PluginManager();
 
-    ~PluginManager() = default;
+    // Buscar plugins VST3 instalados
+    void scanPlugins();
 
-    // ========================================================
-    // ESCANEAR PLUGINS VST3
-    // ========================================================
+    // Obtener plugins encontrados
+    const juce::KnownPluginList& getKnownPlugins() const;
 
-    void scanPlugins()
-    {
-        knownPlugins.clear();
+    int getNumPlugins() const;
 
-        auto formats = formatManager.getFormats();
+    juce::String getPluginName(int index) const;
 
-        for (auto* format : formats)
-        {
-            if (format == nullptr)
-                continue;
-
-            if (format->getName().containsIgnoreCase("VST3"))
-            {
-                juce::FileSearchPath searchPaths;
-
-                searchPaths.add(
-                    juce::File(
-                        "C:\\Program Files\\Common Files\\VST3"
-                    )
-                );
-
-                searchPaths.add(
-                    juce::File(
-                        "C:\\Program Files (x86)\\Common Files\\VST3"
-                    )
-                );
-
-                formatManager.scanAndAddFile(
-                    searchPaths.toString(),
-                    true,
-                    knownPlugins,
-                    *format
-                );
-            }
-        }
-    }
-
-    // ========================================================
-    // OBTENER PLUGINS DETECTADOS
-    // ========================================================
-
-    const juce::KnownPluginList& getKnownPlugins() const
-    {
-        return knownPlugins;
-    }
-
-    int getNumPlugins() const
-    {
-        return knownPlugins.getNumTypes();
-    }
-
-    juce::String getPluginName(int index) const
-    {
-        const auto& plugins = knownPlugins.getTypes();
-
-        if (index < 0 || index >= plugins.size())
-            return {};
-
-        return plugins.getReference(index).name;
-    }
-
-    // ========================================================
-    // OBTENER FORMATO VST3
-    // ========================================================
-
-    juce::AudioPluginFormatManager& getFormatManager()
-    {
-        return formatManager;
-    }
+    // Acceso al administrador de formatos
+    juce::AudioPluginFormatManager& getFormatManager();
 
 private:
 
