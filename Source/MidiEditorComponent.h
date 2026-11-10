@@ -1,98 +1,285 @@
-#pragma once
-#include <JuceHeader.h>
 
-class MidiEditorComponent : public juce::Component
+#include "BeatMaker.h"
+
+// ============================================================
+// LA PAUTA STUDIO
+// BEAT MAKER - 16 PASOS
+// ============================================================
+
+BeatMaker::BeatMaker()
 {
-public:
-    MidiEditorComponent()
+    setSize(1020, 280);
+
+    addAndMakeVisible(title);
+    title.setText(
+        "BEAT MAKER - 16 PASOS - LA PAUTA",
+        juce::dontSendNotification);
+
+    title.setFont(juce::Font(18.0f, juce::Font::bold));
+    title.setColour(
+        juce::Label::textColourId,
+        juce::Colour(0xff36d6c5));
+
+    addAndMakeVisible(dembowBtn);
+    addAndMakeVisible(trapBtn);
+    addAndMakeVisible(drillBtn);
+    addAndMakeVisible(clearBtn);
+    addAndMakeVisible(playBtn);
+
+    dembowBtn.addListener(this);
+    trapBtn.addListener(this);
+    drillBtn.addListener(this);
+    clearBtn.addListener(this);
+    playBtn.addListener(this);
+
+    for (int r = 0; r < 4; ++r)
     {
-        setSize(800, 400);
-    }
-
-    ~MidiEditorComponent() override = default;
-
-    void paint(juce::Graphics& g) override
-    {
-        g.fillAll(juce::Colour(0xff181818)); // Fondo oscuro del piano roll
-
-        // Dibujar líneas verticales de la cuadrícula (tiempos / beats)
-        g.setColour(juce::Colour(0xff333333));
-        float beatWidth = 40.0f;
-        for (float x = 0; x < (float)getWidth(); x += beatWidth)
+        for (int s = 0; s < 16; ++s)
         {
-            g.drawVerticalLine((int)x, 0.0f, (float)getHeight());
-        }
-
-        // Dibujar líneas horizontales (teclas del piano)
-        float rowHeight = 16.0f;
-        for (float y = 0; y < (float)getHeight(); y += rowHeight)
-        {
-            g.drawHorizontalLine((int)y, 0.0f, (float)getWidth());
-        }
-
-        // Dibujar las notas MIDI pintadas por el usuario
-        g.setColour(juce::Colours::orange);
-        for (const auto& note : paintedNotes)
-        {
-            float x = (float)note.beat * beatWidth;
-            float y = (127.0f - (float)note.pitch) * rowHeight;
-            g.fillRect(x, y, beatWidth, rowHeight - 1.0f);
+            addAndMakeVisible(steps[r][s]);
+            steps[r][s].addListener(this);
         }
     }
 
-    void mouseDown(const juce::MouseEvent& event) override
+    loadDembow();
+    startTimer(50);
+}
+
+// ============================================================
+// PATRON DEMBOW
+// ============================================================
+
+void BeatMaker::loadDembow()
+{
+    clearPattern();
+
+    pattern[0][0] = true;
+    pattern[0][6] = true;
+    pattern[0][8] = true;
+    pattern[0][14] = true;
+
+    pattern[1][4] = true;
+    pattern[1][12] = true;
+
+    for (int s = 0; s < 16; s += 2)
+        pattern[2][s] = true;
+
+    pattern[3][0] = true;
+    pattern[3][7] = true;
+    pattern[3][10] = true;
+
+    bpmValue = 95;
+
+    for (int r = 0; r < 4; ++r)
+        for (int s = 0; s < 16; ++s)
+            steps[r][s].setToggleState(
+                pattern[r][s],
+                juce::dontSendNotification);
+
+    repaint();
+}
+
+// ============================================================
+// PATRON TRAP
+// ============================================================
+
+void BeatMaker::loadTrap()
+{
+    clearPattern();
+
+    pattern[0][0] = true;
+    pattern[0][10] = true;
+
+    pattern[1][8] = true;
+
+    for (int s = 0; s < 16; ++s)
+        pattern[2][s] = true;
+
+    pattern[2][3] = false;
+    pattern[2][11] = false;
+
+    pattern[3][0] = true;
+    pattern[3][3] = true;
+    pattern[3][6] = true;
+    pattern[3][10] = true;
+
+    bpmValue = 140;
+
+    for (int r = 0; r < 4; ++r)
+        for (int s = 0; s < 16; ++s)
+            steps[r][s].setToggleState(
+                pattern[r][s],
+                juce::dontSendNotification);
+
+    repaint();
+}
+
+// ============================================================
+// PATRON DRILL
+// ============================================================
+
+void BeatMaker::loadDrill()
+{
+    clearPattern();
+
+    pattern[0][0] = true;
+    pattern[0][8] = true;
+    pattern[0][11] = true;
+
+    pattern[1][4] = true;
+    pattern[1][12] = true;
+
+    for (int s = 0; s < 16; s += 2)
+        pattern[2][s] = true;
+
+    pattern[3][0] = true;
+    pattern[3][8] = true;
+    pattern[3][14] = true;
+
+    bpmValue = 142;
+
+    for (int r = 0; r < 4; ++r)
+        for (int s = 0; s < 16; ++s)
+            steps[r][s].setToggleState(
+                pattern[r][s],
+                juce::dontSendNotification);
+
+    repaint();
+}
+
+// ============================================================
+// INTERFAZ
+// ============================================================
+
+void BeatMaker::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff111820));
+
+    g.setColour(juce::Colour(0xff1d303a));
+    g.fillRect(0, 0, getWidth(), 45);
+
+    g.setColour(juce::Colour(0xff36d6c5));
+    g.drawRect(getLocalBounds(), 1);
+
+    for (int r = 0; r < 4; ++r)
     {
-        float beatWidth = 40.0f;
-        float rowHeight = 16.0f;
+        g.setColour(juce::Colour(0xffdce6ed));
 
-        // Calcular nota y tiempo según dónde se hizo clic
-        double beat = (double)event.x / (double)beatWidth;
-        int pitch = 127 - (int)((double)event.y / (double)rowHeight);
-        pitch = juce::jlimit(0, 127, pitch);
+        g.drawText(
+            rowNames[r],
+            10,
+            70 + r * 45,
+            70,
+            30,
+            juce::Justification::centredLeft);
+    }
 
-        paintedNotes.push_back({ beat, pitch, 100, 1.0 });
+    if (playing)
+    {
+        g.setColour(juce::Colour(0x5536d6c5));
+
+        g.fillRect(
+            90 + currentStep * 35,
+            60,
+            30,
+            190);
+    }
+}
+
+// ============================================================
+// POSICIONAMIENTO
+// ============================================================
+
+void BeatMaker::resized()
+{
+    title.setBounds(10, 5, 400, 30);
+
+    dembowBtn.setBounds(450, 5, 110, 30);
+    trapBtn.setBounds(570, 5, 110, 30);
+    drillBtn.setBounds(690, 5, 110, 30);
+    clearBtn.setBounds(810, 5, 90, 30);
+    playBtn.setBounds(910, 5, 100, 30);
+
+    for (int r = 0; r < 4; ++r)
+    {
+        for (int s = 0; s < 16; ++s)
+        {
+            steps[r][s].setBounds(
+                90 + s * 35,
+                70 + r * 45,
+                30,
+                30);
+        }
+    }
+}
+
+// ============================================================
+// BOTONES
+// ============================================================
+
+void BeatMaker::buttonClicked(juce::Button* button)
+{
+    if (button == &dembowBtn)
+        loadDembow();
+
+    else if (button == &trapBtn)
+        loadTrap();
+
+    else if (button == &drillBtn)
+        loadDrill();
+
+    else if (button == &clearBtn)
+        clearPattern();
+
+    else if (button == &playBtn)
+    {
+        playing = !playing;
+
+        playBtn.setButtonText(
+            playing ? "STOP BEAT" : "PLAY BEAT");
+
+        if (playing)
+            currentStep = 0;
+
         repaint();
     }
 
-private:
-    struct MidiNoteVisual {
-        double beat;
-        int pitch;
-        int velocity;
-        double duration;
-    };
+    for (int r = 0; r < 4; ++r)
+    {
+        for (int s = 0; s < 16; ++s)
+        {
+            if (button == &steps[r][s])
+            {
+                pattern[r][s] =
+                    steps[r][s].getToggleState();
 
-    std::vector<MidiNoteVisual> paintedNotes;
+                repaint();
+                return;
+            }
+        }
+    }
+}
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiEditorComponent)
-};
+// ============================================================
+// TEMPORIZADOR
+// ============================================================
 
-// Ventana flotante para el Piano Roll
-class MidiEditorWindow : public juce::DocumentWindow
+void BeatMaker::timerCallback()
 {
-public:
-    MidiEditorWindow(const juce::String& trackName)
-        : DocumentWindow("Piano Roll - " + trackName,
-                         juce::Desktop::getInstance().getDefaultLookAndFeel()
-                             .findColour(juce::ResizableWindow::backgroundColourId),
-                         DocumentWindow::allButtons)
+    if (!playing)
+        return;
+
+    const double millisecondsPerStep =
+        60000.0 / (juce::jmax(1, bpmValue) * 4.0);
+
+    static double elapsed = 0.0;
+
+    elapsed += 50.0;
+
+    if (elapsed >= millisecondsPerStep)
     {
-        editorComponent = std::make_unique<MidiEditorComponent>();
-        setContentOwned(editorComponent.get(), true);
-        setResizable(true, true);
-        centreWithSize(800, 400);
-        setVisible(true);
+        elapsed = 0.0;
+        currentStep = (currentStep + 1) % 16;
+        repaint();
     }
-
-    ~MidiEditorWindow() override = default;
-
-    void closeButtonPressed() override
-    {
-        delete this;
-    }
-
-private:
-    std::unique_ptr<MidiEditorComponent> editorComponent;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiEditorWindow)
-};
+}
