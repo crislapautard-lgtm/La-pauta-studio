@@ -10,7 +10,9 @@ public:
     AudioPluginAudioProcessorEditor (AudioPluginAudioProcessor& p)
         : AudioProcessorEditor (&p), audioProcessor (p)
     {
-        addAndMakeVisible (mainComponent);
+        // Inicializar el componente principal de manera segura con puntero único
+        mainComponent = std::make_unique<MainComponent>();
+        addAndMakeVisible (mainComponent.get());
         setSize (1000, 700);
     }
 
@@ -23,12 +25,13 @@ public:
 
     void resized() override
     {
-        mainComponent.setBounds (getLocalBounds());
+        if (mainComponent)
+            mainComponent->setBounds (getLocalBounds());
     }
 
 private:
     AudioPluginAudioProcessor& audioProcessor;
-    MainComponent mainComponent;
+    std::unique_ptr<MainComponent> mainComponent;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessorEditor)
 };
