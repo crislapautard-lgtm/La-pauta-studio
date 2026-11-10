@@ -8,12 +8,6 @@
 #include <memory>
 #include <vector>
 
-// ============================================================
-// LA PAUTA STUDIO
-// MAIN COMPONENT
-// NAVEGADOR VST3
-// ============================================================
-
 class MainComponent : public juce::Component
 {
 public:
