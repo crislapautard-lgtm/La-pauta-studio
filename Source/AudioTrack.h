@@ -4,13 +4,13 @@
 #include <JuceHeader.h>
 #include <string>
 #include <memory>
+#include <cmath>
 
 #include "Track.h"
 
 // ============================================================
 // LA PAUTA STUDIO
-// AudioTrack.h
-// Administración de pistas de audio
+// AUDIOTRACK
 // ============================================================
 
 class AudioTrack : public Track
@@ -49,13 +49,8 @@ public:
 
         transportSource.prepareToPlay(
             samplesPerBlockExpected,
-            sampleRate
-        );
+            sampleRate);
     }
-
-    // ========================================================
-    // LIBERAR RECURSOS
-    // ========================================================
 
     void releaseResources()
     {
@@ -64,7 +59,7 @@ public:
     }
 
     // ========================================================
-    // PROCESAMIENTO DE AUDIO
+    // PROCESAMIENTO
     // ========================================================
 
     void processBlock(
@@ -84,8 +79,7 @@ public:
             juce::AudioSourceChannelInfo info(
                 &buffer,
                 0,
-                buffer.getNumSamples()
-            );
+                buffer.getNumSamples());
 
             transportSource.getNextAudioBlock(info);
         }
@@ -94,7 +88,7 @@ public:
     }
 
     // ========================================================
-    // VOLUMEN Y PANORAMA
+    // VOLUMEN Y PAN
     // ========================================================
 
     void applyVolumeAndPan(
@@ -120,11 +114,17 @@ public:
         const float rightGain =
             volume * std::sqrt(rightPan);
 
-        buffer.applyGain(0, 0, buffer.getNumSamples(), leftGain);
-        buffer.applyGain(1, 0, buffer.getNumSamples(), rightGain);
+        buffer.applyGain(
+            0, 0, buffer.getNumSamples(), leftGain);
+
+        buffer.applyGain(
+            1, 0, buffer.getNumSamples(), rightGain);
 
         for (int ch = 2; ch < channels; ++ch)
-            buffer.applyGain(ch, 0, buffer.getNumSamples(), volume);
+        {
+            buffer.applyGain(
+                ch, 0, buffer.getNumSamples(), volume);
+        }
     }
 
     // ========================================================
@@ -140,13 +140,11 @@ public:
 
         const int channels = juce::jmin(
             sourceBuffer.getNumChannels(),
-            auxBusBuffer.getNumChannels()
-        );
+            auxBusBuffer.getNumChannels());
 
         const int samples = juce::jmin(
             sourceBuffer.getNumSamples(),
-            auxBusBuffer.getNumSamples()
-        );
+            auxBusBuffer.getNumSamples());
 
         for (int ch = 0; ch < channels; ++ch)
         {
@@ -157,13 +155,12 @@ public:
                 ch,
                 0,
                 samples,
-                auxSendLevel
-            );
+                auxSendLevel);
         }
     }
 
     // ========================================================
-    // CARGAR ARCHIVO DE AUDIO
+    // CARGAR ARCHIVO
     // ========================================================
 
     bool loadAudioFile(const juce::File& file)
@@ -171,27 +168,28 @@ public:
         if (!file.existsAsFile())
             return false;
 
-        auto* reader = formatManager.createReaderFor(file);
+        std::unique_ptr<juce::AudioFormatReader> reader(
+            formatManager.createReaderFor(file));
 
         if (reader == nullptr)
             return false;
+
+        const double fileSampleRate = reader->sampleRate;
+
+        auto newSource =
+            std::make_unique<juce::AudioFormatReaderSource>(
+                reader.release(),
+                true);
 
         transportSource.stop();
         transportSource.setSource(nullptr);
         readerSource.reset();
 
-        auto newSource =
-            std::make_unique<juce::AudioFormatReaderSource>(
-                reader,
-                true
-            );
-
         transportSource.setSource(
             newSource.get(),
             32768,
             &readAheadThread,
-            reader->sampleRate
-        );
+            fileSampleRate);
 
         readerSource = std::move(newSource);
 
@@ -212,7 +210,6 @@ public:
 
         transportSource.setPosition(0.0);
         transportSource.start();
-
         isPlaying = true;
     }
 
@@ -246,18 +243,16 @@ public:
         isRecordingState = false;
     }
 
-    // La escritura WAV se integrará mediante un sistema
-    // de grabación independiente del hilo de audio.
     void processRecording(
         const float* const* inputData,
         int numChannels,
         int numSamples)
     {
+        // La escritura de archivos WAV todavía no está implementada.
         juce::ignoreUnused(
             inputData,
             numChannels,
-            numSamples
-        );
+            numSamples);
     }
 
     // ========================================================
@@ -274,7 +269,7 @@ public:
     }
 
     // ========================================================
-    // CONTROLES DE PISTA
+    // CONTROLES
     // ========================================================
 
     void setVolume(float newVolume)
@@ -312,7 +307,7 @@ public:
         muted = shouldMute;
     }
 
-    bool isMuted() const
+    bool isMuted() const override
     {
         return muted;
     }
@@ -355,7 +350,6 @@ private:
 
     bool isPlaying = false;
     bool isRecordingState = false;
-
     bool muted = false;
     bool soloed = false;
 
