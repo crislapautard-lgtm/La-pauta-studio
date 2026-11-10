@@ -1,43 +1,58 @@
+
 #pragma once
+
 #include <JuceHeader.h>
+
+// ============================================================
+// LA PAUTA STUDIO
+// AUDIO SETTINGS WINDOW
+// ============================================================
 
 class AudioSettingsWindow : public juce::DocumentWindow
 {
 public:
-    AudioSettingsWindow(juce::AudioDeviceManager& deviceManager)
-        : DocumentWindow("Configuracion de Audio y Hardware",
-                         juce::Desktop::getInstance().getDefaultLookAndFeel()
-                             .findColour(juce::ResizableWindow::backgroundColourId),
-                         DocumentWindow::allButtons)
-    {
-        // Creamos el panel de configuración nativo de JUCE conectado al gestor de audio global
-        audioSettingsComp = std::make_unique<juce::AudioDeviceSelectorComponent>(
-            deviceManager,
-            0,     // min input channels
-            256,   // max input channels
-            0,     // min output channels
-            256,   // max output channels
-            true,  // include MIDI inputs
-            true,  // include MIDI outputs
-            true,  // use stereo pairs
-            false  // hide advanced options
-        );
 
-        setContentOwned(audioSettingsComp.release(), true);
+    explicit AudioSettingsWindow(
+        juce::AudioDeviceManager& deviceManager)
+
+        : juce::DocumentWindow(
+            "La Pauta Studio - Configuracion de Audio",
+            juce::Desktop::getInstance()
+                .getDefaultLookAndFeel()
+                .findColour(
+                    juce::ResizableWindow::backgroundColourId),
+            juce::DocumentWindow::allButtons)
+    {
+        auto* settingsComponent =
+            new juce::AudioDeviceSelectorComponent(
+                deviceManager,
+                0,
+                256,
+                0,
+                256,
+                true,
+                true,
+                true,
+                false);
+
+        setContentOwned(settingsComponent, true);
+
         setResizable(true, true);
-        centreWithSize(500, 450);
+        centreWithSize(600, 500);
         setVisible(true);
     }
 
     ~AudioSettingsWindow() override = default;
 
-    void closeButtonPressed() override {
-        // Al cerrar la ventana, se destruye y guarda la preferencia automáticamente
-        delete this;
+    void closeButtonPressed() override
+    {
+        // Ocultar la ventana sin destruir un objeto
+        // que podría estar administrado por otra clase.
+        setVisible(false);
     }
 
 private:
-    std::unique_ptr<juce::AudioDeviceSelectorComponent> audioSettingsComp;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioSettingsWindow)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(
+        AudioSettingsWindow)
 };
