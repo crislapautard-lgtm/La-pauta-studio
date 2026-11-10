@@ -34,12 +34,15 @@ target_sources(La-Pauta-Studio
         ${SOURCE_FILES}
 )
 
-# Configuración
+# Configuración del proyecto y alojamiento VST3
 target_compile_definitions(La-Pauta-Studio
     PUBLIC
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
+        JUCE_PLUGINHOST_VST3=1
+        JUCE_PLUGINHOST_VST=0
+        JUCE_PLUGINHOST_AU=0
 )
 
 # Módulos JUCE
