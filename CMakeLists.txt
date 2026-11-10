@@ -12,15 +12,15 @@ juce_add_plugin(La-Pauta-Studio
     PRODUCT_NAME "La Pauta Studio"
 )
 
-# Archivos del proyecto (ajustados a la raíz para evitar errores de ruta)
+# Archivos del proyecto apuntando a la subcarpeta Source/
 target_sources(La-Pauta-Studio
     PRIVATE
-        PluginProcessor.h
-        PluginProcessor.cpp
-        MainComponent.h
-        MainComponent.cpp
-        TrackComponent.h
-        TrackComponent.cpp
+        Source/PluginProcessor.h
+        Source/PluginProcessor.cpp
+        Source/MainComponent.h
+        Source/MainComponent.cpp
+        Source/TrackComponent.h
+        Source/TrackComponent.cpp
 )
 
 target_compile_definitions(La-Pauta-Studio
