@@ -31,6 +31,7 @@ target_compile_definitions(La-Pauta-Studio
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
+        JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1
 )
 
 target_link_libraries(La-Pauta-Studio
