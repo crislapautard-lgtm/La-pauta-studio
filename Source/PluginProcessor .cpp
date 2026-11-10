@@ -2,28 +2,15 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-#include <string>
-
 // ============================================================
-// LA PAUTA STUDIO
-// PluginProcessor.cpp
-// Motor principal del proyecto
+// LA PAUTA STUDIO - PLUGIN PROCESSOR
 // ============================================================
 
 AudioPluginAudioProcessor::AudioPluginAudioProcessor()
     : juce::AudioProcessor(
         BusesProperties()
-            .withInput(
-                "Input",
-                juce::AudioChannelSet::stereo(),
-                true
-            )
-            .withOutput(
-                "Output",
-                juce::AudioChannelSet::stereo(),
-                true
-            )
-    )
+            .withInput("Input", juce::AudioChannelSet::stereo(), true)
+            .withOutput("Output", juce::AudioChannelSet::stereo(), true))
 {
     trackVolume.fill(0.8f);
     trackPan.fill(0.0f);
@@ -51,6 +38,8 @@ void AudioPluginAudioProcessor::prepareToPlay(
     currentSampleRate = sampleRate;
     currentBlockSize = samplesPerBlock;
 
+    audioEngine.prepareToPlay(samplesPerBlock, sampleRate, 2);
+
     for (auto& track : tracks)
     {
         if (auto* audioTrack = dynamic_cast<AudioTrack*>(track.get()))
@@ -60,6 +49,8 @@ void AudioPluginAudioProcessor::prepareToPlay(
 
 void AudioPluginAudioProcessor::releaseResources()
 {
+    audioEngine.releaseResources();
+
     for (auto& track : tracks)
     {
         if (auto* audioTrack = dynamic_cast<AudioTrack*>(track.get()))
@@ -78,7 +69,6 @@ bool AudioPluginAudioProcessor::isBusesLayoutSupported(
     juce::ignoreUnused(layouts);
     return true;
 #else
-
     const auto output = layouts.getMainOutputChannelSet();
 
     if (output != juce::AudioChannelSet::mono()
@@ -107,22 +97,12 @@ void AudioPluginAudioProcessor::processBlock(
     const int inputChannels = getTotalNumInputChannels();
     const int outputChannels = getTotalNumOutputChannels();
 
-    for (int channel = inputChannels;
-         channel < outputChannels;
-         ++channel)
-    {
+    for (int channel = inputChannels; channel < outputChannels; ++channel)
         buffer.clear(channel, 0, buffer.getNumSamples());
-    }
 
-    // Motor de pistas existente.
-    // La grabación real y la mezcla independiente requieren
-    // completar AudioEngine y AudioTrack.
     audioEngine.processBlock(buffer, midiMessages, tracks);
 
-    // Volumen general de salida.
-    buffer.applyGain(
-        juce::jlimit(0.0f, 1.5f, masterVolume)
-    );
+    buffer.applyGain(juce::jlimit(0.0f, 1.5f, masterVolume));
 }
 
 // ============================================================
@@ -170,15 +150,8 @@ double AudioPluginAudioProcessor::getTailLengthSeconds() const
 // PROGRAMAS
 // ============================================================
 
-int AudioPluginAudioProcessor::getNumPrograms()
-{
-    return 1;
-}
-
-int AudioPluginAudioProcessor::getCurrentProgram()
-{
-    return 0;
-}
+int AudioPluginAudioProcessor::getNumPrograms() { return 1; }
+int AudioPluginAudioProcessor::getCurrentProgram() { return 0; }
 
 void AudioPluginAudioProcessor::setCurrentProgram(int index)
 {
@@ -231,7 +204,7 @@ void AudioPluginAudioProcessor::getStateInformation(
         stream.writeFloat(trackPan[i]);
         stream.writeBool(trackMute[i]);
         stream.writeBool(trackSolo[i]);
-        stream.writeBool(trackRecording[i]);
+        stream.writeBool(false);
     }
 }
 
@@ -239,27 +212,37 @@ void AudioPluginAudioProcessor::setStateInformation(
     const void* data,
     int sizeInBytes)
 {
-    if (data == nullptr || sizeInBytes <= 0)
+    if (data == nullptr || sizeInBytes < 8)
         return;
 
-    juce::MemoryInputStream stream(data, (size_t)sizeInBytes, false);
-
-    if (stream.getNumBytesRemaining() < 8)
-        return;
+    juce::MemoryInputStream stream(
+        data,
+        static_cast<size_t>(sizeInBytes),
+        false);
 
     currentBPM = juce::jlimit(40.0f, 240.0f, stream.readFloat());
     masterVolume = juce::jlimit(0.0f, 1.5f, stream.readFloat());
 
     for (int i = 0; i < MAX_TRACKS; ++i)
     {
-        if (stream.getNumBytesRemaining() < 9)
+        if (stream.getNumBytesRemaining() < 10)
             break;
 
         trackVolume[i] = juce::jlimit(0.0f, 1.5f, stream.readFloat());
         trackPan[i] = juce::jlimit(-1.0f, 1.0f, stream.readFloat());
         trackMute[i] = stream.readBool();
         trackSolo[i] = stream.readBool();
-        trackRecording[i] = stream.readBool();
+
+        stream.readBool();
+        trackRecording[i] = false;
+
+        if (auto* audioTrack = getAudioTrack(i))
+        {
+            audioTrack->setVolume(trackVolume[i]);
+            audioTrack->setPan(trackPan[i]);
+            audioTrack->setMute(trackMute[i]);
+            audioTrack->setSolo(trackSolo[i]);
+        }
     }
 }
 
@@ -269,10 +252,10 @@ void AudioPluginAudioProcessor::setStateInformation(
 
 Track* AudioPluginAudioProcessor::getTrack(int index)
 {
-    if (index < 0 || index >= (int)tracks.size())
+    if (index < 0 || index >= static_cast<int>(tracks.size()))
         return nullptr;
 
-    return tracks[(size_t)index].get();
+    return tracks[static_cast<size_t>(index)].get();
 }
 
 AudioTrack* AudioPluginAudioProcessor::getAudioTrack(int index)
@@ -285,42 +268,38 @@ MidiTrack* AudioPluginAudioProcessor::getMidiTrack(int index)
     return dynamic_cast<MidiTrack*>(getTrack(index));
 }
 
-bool AudioPluginAudioProcessor::addAudioTrack(
-    const juce::String& name)
+bool AudioPluginAudioProcessor::addAudioTrack(const juce::String& name)
 {
-    if ((int)tracks.size() >= MAX_TRACKS)
+    if (static_cast<int>(tracks.size()) >= MAX_TRACKS)
         return false;
 
-    auto newTrack = std::make_unique<AudioTrack>(
-        name.toStdString()
-    );
+    auto newTrack = std::make_unique<AudioTrack>(name.toStdString());
 
-    newTrack->prepareToPlay(
-        currentBlockSize,
-        currentSampleRate
-    );
+    newTrack->prepareToPlay(currentBlockSize, currentSampleRate);
+
+    const int index = static_cast<int>(tracks.size());
+
+    newTrack->setVolume(trackVolume[index]);
+    newTrack->setPan(trackPan[index]);
+    newTrack->setMute(trackMute[index]);
+    newTrack->setSolo(trackSolo[index]);
 
     tracks.push_back(std::move(newTrack));
-
     return true;
 }
 
-bool AudioPluginAudioProcessor::addMidiTrack(
-    const juce::String& name)
+bool AudioPluginAudioProcessor::addMidiTrack(const juce::String& name)
 {
-    if ((int)tracks.size() >= MAX_TRACKS)
+    if (static_cast<int>(tracks.size()) >= MAX_TRACKS)
         return false;
 
-    tracks.push_back(
-        std::make_unique<MidiTrack>(name)
-    );
-
+    tracks.push_back(std::make_unique<MidiTrack>(name));
     return true;
 }
 
 void AudioPluginAudioProcessor::removeTrack(int index)
 {
-    if (index < 0 || index >= (int)tracks.size())
+    if (index < 0 || index >= static_cast<int>(tracks.size()))
         return;
 
     tracks.erase(tracks.begin() + index);
@@ -337,73 +316,65 @@ void AudioPluginAudioProcessor::setTrackRecording(
     if (trackIndex < 0 || trackIndex >= MAX_TRACKS)
         return;
 
-    trackRecording[(size_t)trackIndex] = shouldRecord;
+    trackRecording[trackIndex] = shouldRecord;
+
+    if (auto* audioTrack = getAudioTrack(trackIndex))
+        audioTrack->setIsRecording(shouldRecord);
 }
 
-bool AudioPluginAudioProcessor::isTrackRecording(
-    int trackIndex) const
+bool AudioPluginAudioProcessor::isTrackRecording(int trackIndex) const
 {
     if (trackIndex < 0 || trackIndex >= MAX_TRACKS)
         return false;
 
-    return trackRecording[(size_t)trackIndex];
+    return trackRecording[trackIndex];
 }
 
 // ============================================================
 // MEZCLADOR
 // ============================================================
 
-void AudioPluginAudioProcessor::setTrackVolume(
-    int trackIndex,
-    float volume)
+void AudioPluginAudioProcessor::setTrackVolume(int trackIndex, float volume)
 {
     if (trackIndex < 0 || trackIndex >= MAX_TRACKS)
         return;
 
     volume = juce::jlimit(0.0f, 1.5f, volume);
-
-    trackVolume[(size_t)trackIndex] = volume;
+    trackVolume[trackIndex] = volume;
 
     if (auto* track = getAudioTrack(trackIndex))
         track->setVolume(volume);
 }
 
-void AudioPluginAudioProcessor::setTrackPan(
-    int trackIndex,
-    float pan)
+void AudioPluginAudioProcessor::setTrackPan(int trackIndex, float pan)
 {
     if (trackIndex < 0 || trackIndex >= MAX_TRACKS)
         return;
 
     pan = juce::jlimit(-1.0f, 1.0f, pan);
-
-    trackPan[(size_t)trackIndex] = pan;
+    trackPan[trackIndex] = pan;
 
     if (auto* track = getAudioTrack(trackIndex))
         track->setPan(pan);
 }
 
-void AudioPluginAudioProcessor::setTrackMute(
-    int trackIndex,
-    bool shouldMute)
+void AudioPluginAudioProcessor::setTrackMute(int trackIndex, bool shouldMute)
 {
     if (trackIndex < 0 || trackIndex >= MAX_TRACKS)
         return;
 
-    trackMute[(size_t)trackIndex] = shouldMute;
+    trackMute[trackIndex] = shouldMute;
 
     if (auto* track = getAudioTrack(trackIndex))
         track->setMute(shouldMute);
 }
 
-void AudioPluginAudioProcessor::setTrackSolo(
-    int trackIndex,
-    bool shouldSolo)
+void AudioPluginAudioProcessor::setTrackSolo(int trackIndex, bool shouldSolo)
 {
     if (trackIndex < 0 || trackIndex >= MAX_TRACKS)
         return;
 
-    trackSolo[(size_t)trackIndex] = shouldSolo;
+    trackSolo[trackIndex] = shouldSolo;
 
     if (auto* track = getAudioTrack(trackIndex))
         track->setSolo(shouldSolo);
