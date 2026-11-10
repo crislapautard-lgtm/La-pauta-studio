@@ -10,8 +10,7 @@
 
 // ============================================================
 // LA PAUTA STUDIO
-// AudioEngine.h
-// Motor de mezcla de audio
+// AUDIO ENGINE
 // ============================================================
 
 class AudioEngine
@@ -26,7 +25,7 @@ public:
     }
 
     // ========================================================
-    // PREPARACION
+    // PREPARAR MOTOR
     // ========================================================
 
     void prepareToPlay(
@@ -47,6 +46,7 @@ public:
             false
         );
 
+        trackBuffer.clear();
         prepared = true;
     }
 
@@ -56,12 +56,12 @@ public:
 
     void releaseResources()
     {
-        trackBuffer.setSize(0, 0);
         prepared = false;
+        trackBuffer.setSize(0, 0);
     }
 
     // ========================================================
-    // PROCESAMIENTO PRINCIPAL
+    // PROCESAR AUDIO
     // ========================================================
 
     void processBlock(
@@ -75,8 +75,6 @@ public:
         if (numChannels <= 0 || numSamples <= 0)
             return;
 
-        // Comprobar que el motor fue preparado.
-        // No asignamos memoria durante el procesamiento.
         if (!prepared
             || trackBuffer.getNumChannels() < numChannels
             || trackBuffer.getNumSamples() < numSamples)
@@ -86,16 +84,15 @@ public:
             return;
         }
 
-        // Guardar la entrada del micrófono antes de limpiar
-        // la salida principal.
-        // AudioTrack recibe los punteros originales.
+        // Guardar entrada antes de limpiar la mezcla.
         const float* const* inputData =
             buffer.getArrayOfReadPointers();
 
+        // Enviar entrada a las pistas que estén grabando.
         for (const auto& track : tracks)
         {
             if (auto* audioTrack =
-                dynamic_cast<AudioTrack*>(track.get()))
+                    dynamic_cast<AudioTrack*>(track.get()))
             {
                 if (audioTrack->getIsRecording())
                 {
@@ -108,21 +105,19 @@ public:
             }
         }
 
-        // Limpiar la salida para construir la mezcla.
+        // Construir mezcla desde cero.
         buffer.clear();
 
-        // Procesar cada pista en un buffer independiente.
+        // Procesar cada pista individualmente.
         for (const auto& track : tracks)
         {
             if (track == nullptr)
                 continue;
 
-            trackBuffer.clear(
-                0,
-                0,
-                numSamples
-            );
+            // Limpiar TODOS los canales del buffer temporal.
+            trackBuffer.clear();
 
+            // Buffer MIDI temporal de la pista.
             juce::MidiBuffer trackMidi;
 
             track->processBlock(
@@ -130,7 +125,7 @@ public:
                 trackMidi
             );
 
-            // Incorporar los eventos MIDI al bloque principal.
+            // Transferir MIDI al bloque principal.
             for (const auto metadata : trackMidi)
             {
                 midiMessages.addEvent(
@@ -139,7 +134,7 @@ public:
                 );
             }
 
-            // Sumar el audio de la pista a la mezcla.
+            // Sumar audio de la pista a la mezcla.
             const int channelsToMix =
                 juce::jmin(
                     numChannels,
@@ -164,7 +159,6 @@ public:
 
 private:
 
-    // Buffer independiente para cada pista.
     juce::AudioBuffer<float> trackBuffer;
 
     bool prepared = false;
