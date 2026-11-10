@@ -8,6 +8,12 @@
 #include <memory>
 #include <vector>
 
+// ============================================================
+// LA PAUTA STUDIO
+// MAIN COMPONENT
+// NAVEGADOR VST3
+// ============================================================
+
 class MainComponent : public juce::Component
 {
 public:
@@ -24,6 +30,7 @@ private:
 
     AudioPluginAudioProcessor& audioProcessor;
 
+    // PISTAS
     juce::Viewport trackViewport;
     juce::Component trackContainer;
 
@@ -31,14 +38,25 @@ private:
 
     juce::Component masterTrack;
 
+    // BPM
     juce::Label bpmLabel;
     juce::Slider bpmSlider;
 
+    // MASTER
     juce::Label masterLabel;
     juce::Slider masterVolumeSlider;
 
+    // NAVEGADOR VST3
+    juce::Label pluginBrowserLabel;
+    juce::TextButton scanPluginsButton;
+    juce::ComboBox pluginList;
+    juce::Label scanStatusLabel;
+
+    // FUNCIONES
     void createTrackComponents();
     void updateTrackLayout();
+
+    void scanVST3Plugins();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
