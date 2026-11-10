@@ -11,7 +11,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout repository and JUCE submodule
+    - name: Checkout repository
       uses: actions/checkout@v4
       with:
         submodules: recursive
@@ -21,7 +21,6 @@ jobs:
       with:
         repository: juce-framework/JUCE
         path: JUCE
-        ref: 8.0.0 # O puedes dejarlo sin ref para que baje la última versión estable
 
     - name: Configure CMake
       run: cmake -B build -DCMAKE_BUILD_TYPE=Release
