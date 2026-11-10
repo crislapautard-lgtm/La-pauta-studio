@@ -1,14 +1,18 @@
 
 #pragma once
 
-#include <juce_gui_basics/juce_gui_basics.h>
+#include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "TrackComponent.h"
+
+#include <memory>
+#include <vector>
 
 class MainComponent : public juce::Component
 {
 public:
 
-    MainComponent(AudioPluginAudioProcessor& p);
+    explicit MainComponent(AudioPluginAudioProcessor& processor);
 
     ~MainComponent() override;
 
@@ -20,16 +24,21 @@ private:
 
     AudioPluginAudioProcessor& audioProcessor;
 
+    juce::Viewport trackViewport;
     juce::Component trackContainer;
 
-    juce::OwnedArray<juce::Component> tracks;
-    juce::OwnedArray<juce::Component> subgroups;
-    juce::OwnedArray<juce::Component> auxes;
+    std::vector<std::unique_ptr<TrackComponent>> trackComponents;
 
     juce::Component masterTrack;
 
     juce::Label bpmLabel;
     juce::Slider bpmSlider;
+
+    juce::Label masterLabel;
+    juce::Slider masterVolumeSlider;
+
+    void createTrackComponents();
+    void updateTrackLayout();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
