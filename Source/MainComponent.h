@@ -1,30 +1,36 @@
 #pragma once
-#include <JuceHeader.h>
-#include "TrackComponent.h"
+
+#include <juce_gui_basics/juce_gui_basics.h>
 #include "PluginProcessor.h"
 
-class MainComponent : public juce::Component
+class MainComponent  : public juce::Component
 {
 public:
-    MainComponent(AudioPluginAudioProcessor& p);
-    ~MainComponent() override;
+    // El constructor recibe obligatoriamente la referencia al procesador de audio
+    MainComponent (AudioPluginAudioProcessor& p) : audioProcessor (p)
+    {
+        setSize (1000, 700);
+    }
 
-    void paint(juce::Graphics& g) override;
-    void resized() override;
+    ~MainComponent() override {}
+
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
+        
+        // Ejemplo de uso correcto accediendo a las variables del procesador:
+        g.setColour (juce::Colours::white);
+        g.setFont (14.0f);
+        g.drawText ("La-Pauta-Studio - Tracks: " + juce::String (audioProcessor.numTracks), 20, 20, 300, 30, juce::Justification::left);
+    }
+
+    void resized() override
+    {
+    }
 
 private:
+    // Referencia al procesador para acceder a volúmenes, pistas, BPM, etc.
     AudioPluginAudioProcessor& audioProcessor;
-    
-    juce::Viewport viewport;
-    juce::Component trackContainer;
 
-    std::vector<std::unique_ptr<TrackComponent>> tracks;
-    std::vector<std::unique_ptr<TrackComponent>> subgroups;
-    std::vector<std::unique_ptr<TrackComponent>> auxes;
-    TrackComponent masterTrack { "MASTER" };
-
-    juce::Slider bpmSlider;
-    juce::Label  bpmLabel;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
