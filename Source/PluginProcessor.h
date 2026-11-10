@@ -21,7 +21,6 @@ public:
 
     const juce::String getName() const override;
 
-    // Declaraciones MIDI
     bool isMidiEffect() const override;
     bool acceptsMidi() const override;
     bool producesMidi() const override;
@@ -37,7 +36,7 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // VARIABLES DE LA PAUTA STUDIO
+    // LA PAUTA STUDIO: estructura del DAW
     int numTracks = 16;
     int numSubgroups = 4;
     int numAuxes = 4;
@@ -58,6 +57,7 @@ public:
 
     bool trackMute[16] = { false };
     bool trackSolo[16] = { false };
+    bool trackRecording[16] = { false };
 
     float subgroupVolume[4] = {
         0.8f, 0.8f, 0.8f, 0.8f
