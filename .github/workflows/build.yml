@@ -1,3 +1,4 @@
+
 name: Build La Pauta Studio
 
 on:
@@ -16,21 +17,23 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Download JUCE Framework
+    - name: Download JUCE 9.0.5
       uses: actions/checkout@v4
       with:
         repository: juce-framework/JUCE
+        ref: 9.0.5
         path: JUCE
 
-    - name: Configure CMake
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+    - name: Configure CMake x64
+      run: cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release
 
     - name: Build Project
-      run: cmake --build build --config Release
+      run: cmake --build build --config Release --parallel 2
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: La-Pauta-Studio-Windows
+        name: La-Pauta-Studio-Windows-x64
         path: build/La-Pauta-Studio_artefacts/Release/
+        if-no-files-found: error
         
