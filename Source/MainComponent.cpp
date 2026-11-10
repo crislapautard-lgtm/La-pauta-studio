@@ -1,50 +1,127 @@
+
 #include "MainComponent.h"
 
-MainComponent::MainComponent (AudioPluginAudioProcessor& p) : audioProcessor (p)
-{
-    setSize (1000, 700);
+// ============================================================
+// LA PAUTA STUDIO
+// MainComponent.cpp
+// JUCE / C++
+// ============================================================
 
-    addAndMakeVisible (bpmSlider);
-    bpmSlider.setRange (40.0, 240.0, 1.0);
-    bpmSlider.setValue (audioProcessor.currentBPM);
-    
-    bpmLabel.setText ("BPM", juce::dontSendNotification);
-    addAndMakeVisible (bpmLabel);
+MainComponent::MainComponent(AudioPluginAudioProcessor& p)
+    : audioProcessor(p)
+{
+    setSize(1000, 700);
+
+    // BPM SLIDER
+    addAndMakeVisible(bpmSlider);
+
+    bpmSlider.setRange(40.0, 240.0, 1.0);
+    bpmSlider.setValue(audioProcessor.currentBPM);
+
+    bpmSlider.setSliderStyle(
+        juce::Slider::RotaryHorizontalVerticalDrag
+    );
+
+    bpmSlider.setTextBoxStyle(
+        juce::Slider::TextBoxBelow,
+        false,
+        70,
+        20
+    );
+
+    // BPM LABEL
+    bpmLabel.setText(
+        "BPM",
+        juce::dontSendNotification
+    );
+
+    bpmLabel.setJustificationType(
+        juce::Justification::centred
+    );
+
+    addAndMakeVisible(bpmLabel);
 }
+
+// ============================================================
+// DESTRUCTOR
+// ============================================================
 
 MainComponent::~MainComponent()
 {
 }
 
-void MainComponent::paint (juce::Graphics& g)
+// ============================================================
+// PAINT
+// ============================================================
+
+void MainComponent::paint(juce::Graphics& g)
 {
-    g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
-    
-    g.setColour (juce::Colours::white);
-    g.setFont (16.0f);
-    g.drawText ("La-Pauta-Studio (16-Track DAW)", 20, 10, 400, 30, juce::Justification::left);
+    g.fillAll(juce::Colour(0xff10141c));
+
+    g.setColour(juce::Colours::white);
+    g.setFont(24.0f);
+
+    g.drawText(
+        "LA PAUTA STUDIO",
+        20,
+        10,
+        400,
+        35,
+        juce::Justification::left
+    );
+
+    g.setColour(juce::Colour(0xff36a9ff));
+
+    g.setFont(15.0f);
+
+    g.drawText(
+        "16 TRACK DIGITAL AUDIO WORKSTATION",
+        20,
+        45,
+        450,
+        25,
+        juce::Justification::left
+    );
 }
+
+// ============================================================
+// RESIZED
+// ============================================================
 
 void MainComponent::resized()
 {
     auto area = getLocalBounds();
-    
-    bpmLabel.setBounds (area.removeFromTop (40).removeFromLeft (60).reduced (5));
-    bpmSlider.setBounds (area.removeFromTop (40).removeFromLeft (120).reduced (5));
 
-    // ACCESO CORRECTO CON audioProcessor. (Asegúrate de mantenerlo así en todo el archivo)
+    // BPM
+    bpmLabel.setBounds(
+        20,
+        85,
+        70,
+        25
+    );
+
+    bpmSlider.setBounds(
+        20,
+        110,
+        100,
+        100
+    );
+
+    // TRACKS
     for (int i = 0; i < audioProcessor.numTracks; ++i)
     {
-        // Lógica de pistas
-    }
-    
-    for (int i = 0; i < audioProcessor.numSubgroups; ++i)
-    {
-        // Lógica de subgrupos
+        // Aquí se organizarán las pistas de audio.
     }
 
+    // SUBGROUPS
+    for (int i = 0; i < audioProcessor.numSubgroups; ++i)
+    {
+        // Aquí se organizarán los subgrupos.
+    }
+
+    // AUX CHANNELS
     for (int i = 0; i < audioProcessor.numAuxes; ++i)
     {
-        // Lógica de canales aux
+        // Aquí se organizarán los canales auxiliares.
     }
 }
