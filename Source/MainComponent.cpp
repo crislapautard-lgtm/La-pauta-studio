@@ -4,7 +4,7 @@
 // ============================================================
 // LA PAUTA STUDIO
 // MAIN COMPONENT
-// VST3 BROWSER
+// NAVEGADOR VST3 ASINCRONO
 // ============================================================
 
 MainComponent::MainComponent(AudioPluginAudioProcessor& p)
@@ -50,11 +50,11 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
     addAndMakeVisible(bpmLabel);
 
     // ========================================================
-    // VST3 BROWSER
+    // TITULO DEL NAVEGADOR
     // ========================================================
 
     pluginBrowserLabel.setText(
-        "VST3 PLUGIN BROWSER",
+        "VST3 PLUGIN BROWSER - 64 BIT",
         juce::dontSendNotification
     );
 
@@ -71,7 +71,9 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
 
     addAndMakeVisible(pluginBrowserLabel);
 
-    // BOTON ESCANEAR
+    // ========================================================
+    // BOTON DE ESCANEO
+    // ========================================================
 
     scanPluginsButton.setButtonText(
         "ESCANEAR VST3"
@@ -84,7 +86,9 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
 
     addAndMakeVisible(scanPluginsButton);
 
-    // LISTA
+    // ========================================================
+    // LISTA DE PLUGINS
+    // ========================================================
 
     pluginList.setTextWhenNothingSelected(
         "Plugins encontrados apareceran aqui"
@@ -92,7 +96,9 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
 
     addAndMakeVisible(pluginList);
 
+    // ========================================================
     // ESTADO
+    // ========================================================
 
     scanStatusLabel.setText(
         "Pulsa ESCANEAR VST3 para comenzar",
@@ -114,11 +120,17 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
 MainComponent::~MainComponent() = default;
 
 // ============================================================
-// ESCANEAR VST3
+// ESCANEAR VST3 EN SEGUNDO PLANO
 // ============================================================
 
 void MainComponent::scanVST3Plugins()
 {
+    auto& manager =
+        audioProcessor.getPluginManager();
+
+    if (manager.isScanning())
+        return;
+
     scanPluginsButton.setEnabled(false);
 
     scanStatusLabel.setText(
@@ -130,13 +142,34 @@ void MainComponent::scanVST3Plugins()
         juce::dontSendNotification
     );
 
+    juce::Component::SafePointer<MainComponent> safeThis(this);
+
+    manager.scanPluginsAsync(
+        [safeThis]()
+        {
+            if (safeThis == nullptr)
+                return;
+
+            safeThis->updatePluginList();
+        }
+    );
+}
+
+// ============================================================
+// ACTUALIZAR LISTA AL TERMINAR EL ESCANEO
+// ============================================================
+
+void MainComponent::updatePluginList()
+{
     auto& manager =
         audioProcessor.getPluginManager();
 
-    manager.scanPlugins();
-
     const auto& plugins =
         manager.getKnownPlugins().getTypes();
+
+    pluginList.clear(
+        juce::dontSendNotification
+    );
 
     for (int i = 0; i < plugins.size(); ++i)
     {
