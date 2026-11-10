@@ -27,7 +27,8 @@ public:
         {
             midiMessages.addEvent(
                 metadata.getMessage(),
-                metadata.samplePosition);
+                metadata.samplePosition
+            );
         }
     }
 
@@ -50,27 +51,32 @@ public:
         const double samplesPerBeat =
             sampleRate * 60.0 / bpm;
 
-        const int startSample = static_cast<int>(
-            startBeat * samplesPerBeat);
+        const int startSample =
+            juce::roundToInt(startBeat * samplesPerBeat);
 
-        const int endSample = static_cast<int>(
-            (startBeat + durationBeats) * samplesPerBeat);
+        const int endSample =
+            juce::roundToInt(
+                (startBeat + durationBeats) * samplesPerBeat
+            );
 
-        const int midiVelocity = juce::jlimit(
-            1, 127,
-            static_cast<int>(std::round(velocity * 127.0f)));
+        const int midiVelocity =
+            juce::jlimit(
+                1,
+                127,
+                juce::roundToInt(velocity * 127.0f)
+            );
 
-        const juce::MidiMessage noteOn =
-            juce::MidiMessage::noteOn(
-                1, noteNumber,
-                static_cast<juce::uint8>(midiVelocity));
+        auto noteOn = juce::MidiMessage::noteOn(
+            1, noteNumber,
+            static_cast<juce::uint8>(midiVelocity)
+        );
 
-        const juce::MidiMessage noteOff =
-            juce::MidiMessage::noteOff(1, noteNumber);
+        auto noteOff = juce::MidiMessage::noteOff(
+            1, noteNumber
+        );
 
         midiClipContent.addEvent(noteOn, startSample);
         midiClipContent.addEvent(noteOff, endSample);
-        midiClipContent.sort();
     }
 
     juce::MidiBuffer& getMidiData()
