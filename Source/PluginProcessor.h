@@ -1,8 +1,9 @@
+
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
-class AudioPluginAudioProcessor  : public juce::AudioProcessor
+class AudioPluginAudioProcessor : public juce::AudioProcessor
 {
 public:
     AudioPluginAudioProcessor();
@@ -20,8 +21,11 @@ public:
 
     const juce::String getName() const override;
 
+    // Declaraciones MIDI
+    bool isMidiEffect() const override;
     bool acceptsMidi() const override;
     bool producesMidi() const override;
+
     double getTailLengthSeconds() const override;
 
     int getNumPrograms() override;
@@ -33,20 +37,38 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // --- VARIABLES DE TU DAW (La-Pauta-Studio) ---
+    // VARIABLES DE LA PAUTA STUDIO
     int numTracks = 16;
     int numSubgroups = 4;
     int numAuxes = 4;
 
-    float trackVolume[16] = { 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f };
-    float trackPan[16]    = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-    bool  trackMute[16]   = { false, };
-    bool  trackSolo[16]   = { false, };
+    float trackVolume[16] = {
+        0.8f, 0.8f, 0.8f, 0.8f,
+        0.8f, 0.8f, 0.8f, 0.8f,
+        0.8f, 0.8f, 0.8f, 0.8f,
+        0.8f, 0.8f, 0.8f, 0.8f
+    };
 
-    float subgroupVolume[4] = { 0.8f, 0.8f, 0.8f, 0.8f };
-    float auxVolume[4]      = { 0.8f, 0.8f, 0.8f, 0.8f };
-    float masterVolume      = 0.9f;
-    float currentBPM        = 120.0f;
+    float trackPan[16] = {
+        0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f
+    };
+
+    bool trackMute[16] = { false };
+    bool trackSolo[16] = { false };
+
+    float subgroupVolume[4] = {
+        0.8f, 0.8f, 0.8f, 0.8f
+    };
+
+    float auxVolume[4] = {
+        0.8f, 0.8f, 0.8f, 0.8f
+    };
+
+    float masterVolume = 0.9f;
+    float currentBPM = 120.0f;
 
     void setTrackRecording (int trackIndex, bool isRecording);
     void setBPM (float newBPM);
