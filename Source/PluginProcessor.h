@@ -10,11 +10,12 @@
 #include "AudioTrack.h"
 #include "MidiTrack.h"
 #include "AudioEngine.h"
+#include "PluginManager.h"
 
 // ============================================================
 // LA PAUTA STUDIO
-// PluginProcessor.h
-// Motor principal del DAW
+// PLUGIN PROCESSOR
+// MOTOR PRINCIPAL DEL DAW
 // ============================================================
 
 class AudioPluginAudioProcessor : public juce::AudioProcessor
@@ -35,19 +36,16 @@ public:
 
     void prepareToPlay(
         double sampleRate,
-        int samplesPerBlock
-    ) override;
+        int samplesPerBlock) override;
 
     void releaseResources() override;
 
     bool isBusesLayoutSupported(
-        const BusesLayout& layouts
-    ) const override;
+        const BusesLayout& layouts) const override;
 
     void processBlock(
         juce::AudioBuffer<float>& buffer,
-        juce::MidiBuffer& midiMessages
-    ) override;
+        juce::MidiBuffer& midiMessages) override;
 
     // ========================================================
     // EDITOR
@@ -85,24 +83,21 @@ public:
 
     void changeProgramName(
         int index,
-        const juce::String& newName
-    ) override;
+        const juce::String& newName) override;
 
     // ========================================================
-    // ESTADO DEL PROYECTO
+    // ESTADO
     // ========================================================
 
     void getStateInformation(
-        juce::MemoryBlock& destData
-    ) override;
+        juce::MemoryBlock& destData) override;
 
     void setStateInformation(
         const void* data,
-        int sizeInBytes
-    ) override;
+        int sizeInBytes) override;
 
     // ========================================================
-    // ESTRUCTURA DEL ESTUDIO
+    // PISTAS
     // ========================================================
 
     int numTracks = MAX_TRACKS;
@@ -129,13 +124,27 @@ public:
 
     float currentBPM = 120.0f;
 
-    // ========================================================
-    // PISTAS
-    // ========================================================
-
     std::vector<std::unique_ptr<Track>> tracks;
 
     AudioEngine audioEngine;
+
+    // ========================================================
+    // ADMINISTRADOR VST3
+    // ========================================================
+
+    PluginManager& getPluginManager()
+    {
+        return pluginManager;
+    }
+
+    const PluginManager& getPluginManager() const
+    {
+        return pluginManager;
+    }
+
+    // ========================================================
+    // ACCESO A PISTAS
+    // ========================================================
 
     AudioTrack* getAudioTrack(int index);
 
@@ -155,8 +164,7 @@ public:
 
     void setTrackRecording(
         int trackIndex,
-        bool shouldRecord
-    );
+        bool shouldRecord);
 
     bool isTrackRecording(int trackIndex) const;
 
@@ -166,29 +174,35 @@ public:
 
     void setTrackVolume(
         int trackIndex,
-        float volume
-    );
+        float volume);
 
     void setTrackPan(
         int trackIndex,
-        float pan
-    );
+        float pan);
 
     void setTrackMute(
         int trackIndex,
-        bool shouldMute
-    );
+        bool shouldMute);
 
     void setTrackSolo(
         int trackIndex,
-        bool shouldSolo
-    );
+        bool shouldSolo);
 
     void setMasterVolume(float volume);
 
     void setBPM(float newBPM);
 
 private:
+
+    // ========================================================
+    // ADMINISTRADOR DE PLUGINS
+    // ========================================================
+
+    PluginManager pluginManager;
+
+    // ========================================================
+    // CONFIGURACION INTERNA
+    // ========================================================
 
     double currentSampleRate = 44100.0;
 
@@ -197,6 +211,5 @@ private:
     juce::CriticalSection trackLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(
-        AudioPluginAudioProcessor
-    )
+        AudioPluginAudioProcessor)
 };
