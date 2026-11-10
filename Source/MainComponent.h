@@ -11,7 +11,6 @@
 class MainComponent : public juce::Component
 {
 public:
-
     explicit MainComponent(AudioPluginAudioProcessor& processor);
 
     ~MainComponent() override;
@@ -21,7 +20,6 @@ public:
     void resized() override;
 
 private:
-
     AudioPluginAudioProcessor& audioProcessor;
 
     // PISTAS
@@ -51,6 +49,7 @@ private:
     void updateTrackLayout();
 
     void scanVST3Plugins();
+    void updatePluginList();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
