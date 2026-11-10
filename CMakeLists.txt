@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.22)
 
 project(La-Pauta-Studio VERSION 0.0.1)
 
-find_package(JUCE CONFIG REQUIRED)
+# Agregamos JUCE como subdirectorio local para que CMake lo encuentre siempre
+add_subdirectory(JUCE)
 
 juce_add_plugin(La-Pauta-Studio
     PLUGIN_MANUFACTURER_CODE Paut
