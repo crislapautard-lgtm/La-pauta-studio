@@ -1,21 +1,67 @@
+
 #pragma once
+
 #include <JuceHeader.h>
 
-class Track {
+// ============================================================
+// LA PAUTA STUDIO
+// Track.h
+// Clase base para todas las pistas
+// ============================================================
+
+class Track
+{
 public:
-    Track(const juce::String& name) : trackName(name) {}
+
+    explicit Track(const juce::String& name)
+        : trackName(name)
+    {
+    }
+
     virtual ~Track() = default;
 
-    juce::String getTrackName() const { return trackName; }
-    void setTrackName(const juce::String& newName) { trackName = newName; }
+    // ========================================================
+    // NOMBRE
+    // ========================================================
 
-    bool isMuted() const { return muted; }
-    void setMuted(bool shouldMute) { muted = shouldMute; }
+    juce::String getTrackName() const
+    {
+        return trackName;
+    }
 
-    // Método virtual para procesar audio o eventos en el bucle en tiempo real
-    virtual void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) = 0;
+    void setTrackName(const juce::String& newName)
+    {
+        trackName = newName;
+    }
+
+    // ========================================================
+    // MUTE
+    // ========================================================
+
+    virtual bool isMuted() const
+    {
+        return muted;
+    }
+
+    virtual void setMuted(bool shouldMute)
+    {
+        muted = shouldMute;
+    }
+
+    // ========================================================
+    // PROCESAMIENTO
+    // ========================================================
+
+    virtual void processBlock(
+        juce::AudioBuffer<float>& buffer,
+        juce::MidiBuffer& midiMessages
+    ) = 0;
 
 protected:
+
     juce::String trackName;
+
     bool muted = false;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Track)
 };
