@@ -33,6 +33,24 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    // --- VARIABLES DE TU DAW (La-Pauta-Studio) ---
+    int numTracks = 16;
+    int numSubgroups = 4;
+    int numAuxes = 4;
+
+    float trackVolume[16] = { 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f };
+    float trackPan[16]    = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    bool  trackMute[16]   = { false, };
+    bool  trackSolo[16]   = { false, };
+
+    float subgroupVolume[4] = { 0.8f, 0.8f, 0.8f, 0.8f };
+    float auxVolume[4]      = { 0.8f, 0.8f, 0.8f, 0.8f };
+    float masterVolume      = 0.9f;
+    float currentBPM        = 120.0f;
+
+    void setTrackRecording (int trackIndex, bool isRecording);
+    void setBPM (float newBPM);
+
 private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
 };
