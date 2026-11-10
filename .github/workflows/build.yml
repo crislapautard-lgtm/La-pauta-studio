@@ -1,4 +1,4 @@
-name: Build Installer
+name: Build La Pauta Studio
 
 on:
   push:
@@ -11,27 +11,27 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Checkout repository and JUCE submodule
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
-      - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+    - name: Download JUCE Framework
+      uses: actions/checkout@v4
+      with:
+        repository: juce-framework/JUCE
+        path: JUCE
+        ref: 8.0.0 # O puedes dejarlo sin ref para que baje la última versión estable
 
-      - name: Build Project
-        run: cmake --build build --config Release
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Prepare Files
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path OutputFiles
-          Get-ChildItem -Recurse -Filter "*.exe" -Path build | Copy-Item -Destination OutputFiles
+    - name: Build Project
+      run: cmake --build build --config Release
 
-      - name: Build Installer with Inno Setup
-        run: iscc installer.iss
-
-      - name: Upload Installer Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: LaPautaStudio-Installer
-          path: LaPautaStudio_Installer.exe
-          
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: La-Pauta-Studio-Windows
+        path: build/La-Pauta-Studio_artefacts/Release/
+        
