@@ -1,34 +1,45 @@
+
 #pragma once
 
-#include <juce_gui_basics/juce_gui_basics.h>
+#include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "MainComponent.h"
 
-class AudioPluginAudioProcessorEditor  : public juce::AudioProcessorEditor
+class AudioPluginAudioProcessorEditor
+    : public juce::AudioProcessorEditor
 {
 public:
-    AudioPluginAudioProcessorEditor (AudioPluginAudioProcessor& p)
-        : AudioProcessorEditor (&p), audioProcessor (p), mainComponent (p)
+
+    explicit AudioPluginAudioProcessorEditor(
+        AudioPluginAudioProcessor& processor)
+        : juce::AudioProcessorEditor(&processor),
+          audioProcessor(processor),
+          mainComponent(processor)
     {
-        addAndMakeVisible (mainComponent);
-        setSize (1000, 700);
+        addAndMakeVisible(mainComponent);
+
+        setSize(1000, 700);
+        setResizable(true, true);
+        setResizeLimits(800, 600, 1600, 1200);
     }
 
-    ~AudioPluginAudioProcessorEditor() override {}
+    ~AudioPluginAudioProcessorEditor() override = default;
 
-    void paint (juce::Graphics& g) override
+    void paint(juce::Graphics& g) override
     {
-        g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
+        g.fillAll(juce::Colour(0xff10141c));
     }
 
     void resized() override
     {
-        mainComponent.setBounds (getLocalBounds());
+        mainComponent.setBounds(getLocalBounds());
     }
 
 private:
+
     AudioPluginAudioProcessor& audioProcessor;
     MainComponent mainComponent;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessorEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(
+        AudioPluginAudioProcessorEditor)
 };
