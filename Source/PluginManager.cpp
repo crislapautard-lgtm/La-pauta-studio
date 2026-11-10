@@ -2,12 +2,11 @@
 #include "PluginManager.h"
 
 // ============================================================
-// LA PAUTA STUDIO
-// PLUGIN MANAGER
-// VST3 HOST - JUCE 9.0.5
+// CONSTRUCTOR
 // ============================================================
 
 PluginManager::PluginManager()
+    : juce::Thread("La Pauta VST3 Scanner")
 {
 #if JUCE_PLUGINHOST_VST3
     formatManager.addFormat(
@@ -16,29 +15,56 @@ PluginManager::PluginManager()
 #endif
 }
 
-PluginManager::~PluginManager() = default;
-
 // ============================================================
-// ESCANEAR PLUGINS VST3
+// DESTRUCTOR
 // ============================================================
 
-void PluginManager::scanPlugins()
+PluginManager::~PluginManager()
+{
+    stopThread(5000);
+}
+
+// ============================================================
+// INICIAR ESCANEO ASINCRONO
+// ============================================================
+
+void PluginManager::scanPluginsAsync(
+    std::function<void()> onFinished)
+{
+    if (isThreadRunning())
+        return;
+
+    scanFinishedCallback = std::move(onFinished);
+
+    startThread();
+}
+
+// ============================================================
+// ESTADO DEL ESCANEO
+// ============================================================
+
+bool PluginManager::isScanning() const
+{
+    return isThreadRunning();
+}
+
+// ============================================================
+// PROCESO DEL HILO DE ESCANEO
+// ============================================================
+
+void PluginManager::run()
 {
     knownPlugins.clear();
 
+#if JUCE_PLUGINHOST_VST3
+
     juce::FileSearchPath vst3Paths;
 
-    // Carpeta VST3 de Windows 64 bits
+    // CARPETA ESTANDAR VST3 DE WINDOWS 64 BITS
+
     vst3Paths.add(
         juce::File(
             "C:\\Program Files\\Common Files\\VST3"
-        )
-    );
-
-    // Carpeta VST3 alternativa
-    vst3Paths.add(
-        juce::File(
-            "C:\\Program Files (x86)\\Common Files\\VST3"
         )
     );
 
@@ -46,6 +72,9 @@ void PluginManager::scanPlugins()
 
     for (int i = 0; i < formats.size(); ++i)
     {
+        if (threadShouldExit())
+            break;
+
         auto* format = formats.getUnchecked(i);
 
         if (format == nullptr)
@@ -63,21 +92,35 @@ void PluginManager::scanPlugins()
         );
 
         bool cancelled = false;
-
         juce::String pluginBeingScanned;
 
-        while (scanner.scanNextFile(
-            cancelled,
-            pluginBeingScanned))
+        while (!threadShouldExit()
+               && scanner.scanNextFile(
+                   cancelled,
+                   pluginBeingScanned))
         {
-            if (cancelled)
+            if (cancelled || threadShouldExit())
                 break;
         }
     }
+
+#endif
+
+    // DEVOLVER EL RESULTADO A LA INTERFAZ
+
+    auto callback = std::move(scanFinishedCallback);
+
+    juce::MessageManager::callAsync(
+        [callback = std::move(callback)]() mutable
+        {
+            if (callback)
+                callback();
+        }
+    );
 }
 
 // ============================================================
-// CONSULTAR PLUGINS
+// LISTA DE PLUGINS
 // ============================================================
 
 const juce::KnownPluginList&
@@ -87,7 +130,7 @@ PluginManager::getKnownPlugins() const
 }
 
 // ============================================================
-// CANTIDAD DE PLUGINS
+// CANTIDAD
 // ============================================================
 
 int PluginManager::getNumPlugins() const
@@ -96,7 +139,7 @@ int PluginManager::getNumPlugins() const
 }
 
 // ============================================================
-// NOMBRE DEL PLUGIN
+// NOMBRE
 // ============================================================
 
 juce::String PluginManager::getPluginName(int index) const
@@ -110,7 +153,7 @@ juce::String PluginManager::getPluginName(int index) const
 }
 
 // ============================================================
-// FORMATO DE PLUGINS
+// FORMAT MANAGER
 // ============================================================
 
 juce::AudioPluginFormatManager&
