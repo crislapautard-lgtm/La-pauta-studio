@@ -4,17 +4,17 @@
 #include "PluginProcessor.h"
 #include "MainComponent.h"
 
-class LaPautaStudioAudioProcessorEditor  : public juce::AudioProcessorEditor
+class AudioPluginAudioProcessorEditor  : public juce::AudioProcessorEditor
 {
 public:
-    LaPautaStudioAudioProcessorEditor (LaPautaStudioAudioProcessor& p)
+    AudioPluginAudioProcessorEditor (AudioPluginAudioProcessor& p)
         : AudioProcessorEditor (&p), audioProcessor (p)
     {
         addAndMakeVisible (mainComponent);
         setSize (1000, 700);
     }
 
-    ~LaPautaStudioAudioProcessorEditor() override {}
+    ~AudioPluginAudioProcessorEditor() override {}
 
     void paint (juce::Graphics& g) override
     {
@@ -27,8 +27,8 @@ public:
     }
 
 private:
-    LaPautaStudioAudioProcessor& audioProcessor;
+    AudioPluginAudioProcessor& audioProcessor;
     MainComponent mainComponent;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LaPautaStudioAudioProcessorEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessorEditor)
 };
