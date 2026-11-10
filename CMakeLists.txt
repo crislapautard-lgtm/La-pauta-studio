@@ -1,58 +1,44 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.22)
 
-project(La-Pauta-Studio VERSION 0.1.0)
+project(La-Pauta-Studio VERSION 0.0.1)
 
-# Descargar e integrar JUCE automáticamente mediante FetchContent
-include(FetchContent)
-FetchContent_Declare(
-    JUCE
-    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG        master
-)
-FetchContent_MakeAvailable(JUCE)
+find_package(JUCE CONFIG REQUIRED)
 
-juce_add_gui_app(La-Pauta-Studio
-    VERSION 0.1.0
-    COMPANY_NAME "La Pauta"
+juce_add_plugin(La-Pauta-Studio
+    PLUGIN_MANUFACTURER_CODE Paut
+    PLUGIN_CODE Past
+    FORMATS Standalone VST3
     PRODUCT_NAME "La Pauta Studio"
 )
 
-# Generar automáticamente el archivo JuceHeader.h requerido por los componentes
-juce_generate_juce_header(La-Pauta-Studio)
-
-# Registrar todos los archivos fuente y cabeceras del proyecto explícitamente
 target_sources(La-Pauta-Studio
     PRIVATE
-        Source/Main.cpp
-        Source/MainComponent.cpp
+        Source/PluginProcessor.h
+        Source/PluginProcessor.cpp
         Source/MainComponent.h
-        Source/TrackComponent.cpp
+        Source/MainComponent.cpp
         Source/TrackComponent.h
-        Source/Track.h
-        Source/AudioTrack.h
-        Source/MidiTrack.h
-)
-
-# Enlazar los módulos necesarios de JUCE
-target_link_libraries(La-Pauta-Studio
-    PRIVATE
-        juce::juce_gui_basics
-        juce::juce_gui_extra
-        juce::juce_graphics
-        juce::juce_events
-        juce::juce_core
-        juce::juce_audio_basics
-        juce::juce_audio_devices
-        juce::juce_audio_formats
-        juce::juce_audio_processors
-        juce::juce_audio_utils
-    PUBLIC
-        juce::juce_recommended_config_flags
-        juce::juce_recommended_warning_flags
+        Source/TrackComponent.cpp
 )
 
 target_compile_definitions(La-Pauta-Studio
     PUBLIC
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+)
+
+target_link_libraries(La-Pauta-Studio
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_core
+        juce::juce_data_structures
+        juce::juce_events
+        juce::juce_graphics
+        juce::juce_gui_basics
+        juce::juce_gui_extra
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lTO_flags
+        juce::juce_recommended_warning_flags
 )
