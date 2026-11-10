@@ -4,7 +4,7 @@
 // ============================================================
 // LA PAUTA STUDIO
 // MAIN COMPONENT
-// NAVEGADOR VST3
+// VST3 BROWSER
 // ============================================================
 
 MainComponent::MainComponent(AudioPluginAudioProcessor& p)
@@ -35,7 +35,7 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
     bpmSlider.onValueChange = [this]
     {
         audioProcessor.currentBPM =
-            bpmSlider.getValue();
+            static_cast<float>(bpmSlider.getValue());
     };
 
     bpmLabel.setText(
@@ -50,7 +50,7 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
     addAndMakeVisible(bpmLabel);
 
     // ========================================================
-    // NAVEGADOR VST3
+    // VST3 BROWSER
     // ========================================================
 
     pluginBrowserLabel.setText(
@@ -59,7 +59,9 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
     );
 
     pluginBrowserLabel.setFont(
-        juce::Font(18.0f, juce::Font::bold)
+        juce::Font(
+            juce::FontOptions(18.0f).withStyle("Bold")
+        )
     );
 
     pluginBrowserLabel.setColour(
@@ -69,7 +71,7 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
 
     addAndMakeVisible(pluginBrowserLabel);
 
-    // BOTON DE ESCANEO
+    // BOTON ESCANEAR
 
     scanPluginsButton.setButtonText(
         "ESCANEAR VST3"
@@ -82,7 +84,7 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
 
     addAndMakeVisible(scanPluginsButton);
 
-    // LISTA DE PLUGINS
+    // LISTA
 
     pluginList.setTextWhenNothingSelected(
         "Plugins encontrados apareceran aqui"
@@ -90,7 +92,7 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
 
     addAndMakeVisible(pluginList);
 
-    // ESTADO DEL ESCANEO
+    // ESTADO
 
     scanStatusLabel.setText(
         "Pulsa ESCANEAR VST3 para comenzar",
@@ -112,7 +114,7 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
 MainComponent::~MainComponent() = default;
 
 // ============================================================
-// ESCANEAR PLUGINS VST3
+// ESCANEAR VST3
 // ============================================================
 
 void MainComponent::scanVST3Plugins()
@@ -128,20 +130,13 @@ void MainComponent::scanVST3Plugins()
         juce::dontSendNotification
     );
 
-    // Administrador de plugins del procesador
-
-    auto& manager = audioProcessor.getPluginManager();
-
-    // Ejecutar escaneo
+    auto& manager =
+        audioProcessor.getPluginManager();
 
     manager.scanPlugins();
 
-    // Obtener plugins encontrados
-
     const auto& plugins =
         manager.getKnownPlugins().getTypes();
-
-    // Llenar lista
 
     for (int i = 0; i < plugins.size(); ++i)
     {
@@ -151,10 +146,10 @@ void MainComponent::scanVST3Plugins()
         juce::String itemName =
             description.name;
 
-        if (description.manufacturer.isNotEmpty())
+        if (description.manufacturerName.isNotEmpty())
         {
-            itemName += "  -  ";
-            itemName += description.manufacturer;
+            itemName += " - ";
+            itemName += description.manufacturerName;
         }
 
         pluginList.addItem(
@@ -162,8 +157,6 @@ void MainComponent::scanVST3Plugins()
             i + 1
         );
     }
-
-    // Mostrar resultado
 
     scanStatusLabel.setText(
         "Escaneo terminado: "
@@ -185,8 +178,6 @@ void MainComponent::paint(juce::Graphics& g)
         juce::Colour(0xff10141c)
     );
 
-    // TITULO
-
     g.setColour(
         juce::Colours::white
     );
@@ -202,8 +193,6 @@ void MainComponent::paint(juce::Graphics& g)
         juce::Justification::left
     );
 
-    // SUBTITULO
-
     g.setColour(
         juce::Colour(0xff36a9ff)
     );
@@ -218,8 +207,6 @@ void MainComponent::paint(juce::Graphics& g)
         25,
         juce::Justification::left
     );
-
-    // LINEA DECORATIVA
 
     g.setColour(
         juce::Colour(0xff263b55)
@@ -238,38 +225,20 @@ void MainComponent::paint(juce::Graphics& g)
 
 void MainComponent::resized()
 {
-    auto area = getLocalBounds();
-
-    // BPM
-
     bpmLabel.setBounds(
-        20,
-        85,
-        100,
-        25
+        20, 85, 100, 25
     );
 
     bpmSlider.setBounds(
-        20,
-        110,
-        100,
-        110
+        20, 110, 100, 110
     );
 
-    // NAVEGADOR VST3
-
     pluginBrowserLabel.setBounds(
-        160,
-        85,
-        350,
-        30
+        160, 85, 350, 30
     );
 
     scanPluginsButton.setBounds(
-        160,
-        125,
-        180,
-        35
+        160, 125, 180, 35
     );
 
     pluginList.setBounds(
@@ -285,9 +254,4 @@ void MainComponent::resized()
         juce::jmax(250, getWidth() - 190),
         30
     );
-
-    // AREA DE PISTAS
-    // Se conectara en la siguiente etapa.
-
-    juce::ignoreUnused(area);
 }
