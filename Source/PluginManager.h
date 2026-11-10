@@ -7,6 +7,7 @@
 // LA PAUTA STUDIO
 // PLUGIN MANAGER
 // VST3 HOST - 64 BITS
+// JUCE 9.0.5
 // ============================================================
 
 class PluginManager
@@ -14,16 +15,19 @@ class PluginManager
 public:
 
     PluginManager();
+
     ~PluginManager();
 
-    // Buscar plugins VST3 instalados
+    // Escaneo de plugins
     void scanPlugins();
 
-    // Obtener plugins encontrados
+    // Lista de plugins encontrados
     const juce::KnownPluginList& getKnownPlugins() const;
 
+    // Cantidad de plugins
     int getNumPlugins() const;
 
+    // Nombre de plugin
     juce::String getPluginName(int index) const;
 
     // Acceso al administrador de formatos
@@ -35,5 +39,7 @@ private:
 
     juce::KnownPluginList knownPlugins;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginManager)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(
+        PluginManager
+    )
 };
