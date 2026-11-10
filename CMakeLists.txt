@@ -12,18 +12,18 @@ juce_add_plugin(La-Pauta-Studio
     PRODUCT_NAME "La Pauta Studio"
 )
 
-# Generar automáticamente el JuceHeader.h para que reconozca todos tus includes sin modificar el código
+# Generar automáticamente el JuceHeader.h
 juce_generate_juce_header(La-Pauta-Studio)
 
-# Archivos del proyecto apuntando a la subcarpeta Source/
+# Buscar automáticamente todos los archivos .cpp y .h dentro de la carpeta Source/
+file(GLOB_RECURSE SOURCE_FILES 
+    "Source/*.cpp"
+    "Source/*.h"
+)
+
 target_sources(La-Pauta-Studio
     PRIVATE
-        Source/PluginProcessor.h
-        Source/PluginProcessor.cpp
-        Source/MainComponent.h
-        Source/MainComponent.cpp
-        Source/TrackComponent.h
-        Source/TrackComponent.cpp
+        ${SOURCE_FILES}
 )
 
 target_compile_definitions(La-Pauta-Studio
