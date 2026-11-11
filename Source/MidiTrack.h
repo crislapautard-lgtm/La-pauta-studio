@@ -2,17 +2,28 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <atomic>
 #include "Track.h"
+
+// ============================================================
+// LA PAUTA STUDIO
+// MIDI TRACK - FASE 1
+// ============================================================
 
 class MidiTrack : public Track
 {
 public:
+
     explicit MidiTrack(const juce::String& name)
         : Track(name)
     {
     }
 
     ~MidiTrack() override = default;
+
+    // ========================================================
+    // PROCESAMIENTO
+    // ========================================================
 
     void processBlock(
         juce::AudioBuffer<float>& buffer,
@@ -23,14 +34,14 @@ public:
         if (isMuted())
             return;
 
-        for (const auto metadata : midiClipContent)
-        {
-            midiMessages.addEvent(
-                metadata.getMessage(),
-                metadata.samplePosition
-            );
-        }
+        // No reproducir todo el contenido MIDI en cada bloque.
+        // La programación temporal global se conectará
+        // posteriormente con el transporte del DAW.
     }
+
+    // ========================================================
+    // AGREGAR NOTA
+    // ========================================================
 
     void addMidiNote(
         int noteNumber,
@@ -42,6 +53,7 @@ public:
     {
         noteNumber = juce::jlimit(0, 127, noteNumber);
         velocity = juce::jlimit(0.0f, 1.0f, velocity);
+
         bpm = juce::jlimit(20.0, 300.0, bpm);
         sampleRate = juce::jmax(1.0, sampleRate);
 
@@ -56,28 +68,30 @@ public:
 
         const int endSample =
             juce::roundToInt(
-                (startBeat + durationBeats) * samplesPerBeat
-            );
+                (startBeat + durationBeats) * samplesPerBeat);
 
         const int midiVelocity =
             juce::jlimit(
                 1,
                 127,
-                juce::roundToInt(velocity * 127.0f)
-            );
+                juce::roundToInt(velocity * 127.0f));
 
-        auto noteOn = juce::MidiMessage::noteOn(
-            1, noteNumber,
-            static_cast<juce::uint8>(midiVelocity)
-        );
+        const auto noteOn = juce::MidiMessage::noteOn(
+            1,
+            noteNumber,
+            static_cast<juce::uint8>(midiVelocity));
 
-        auto noteOff = juce::MidiMessage::noteOff(
-            1, noteNumber
-        );
+        const auto noteOff = juce::MidiMessage::noteOff(
+            1,
+            noteNumber);
 
         midiClipContent.addEvent(noteOn, startSample);
         midiClipContent.addEvent(noteOff, endSample);
     }
+
+    // ========================================================
+    // DATOS MIDI
+    // ========================================================
 
     juce::MidiBuffer& getMidiData()
     {
@@ -94,8 +108,28 @@ public:
         midiClipContent.clear();
     }
 
+    // ========================================================
+    // ESTADO
+    // ========================================================
+
+    void setMidiEnabled(bool enabled)
+    {
+        midiEnabled.store(
+            enabled,
+            std::memory_order_relaxed);
+    }
+
+    bool isMidiEnabled() const
+    {
+        return midiEnabled.load(
+            std::memory_order_relaxed);
+    }
+
 private:
+
     juce::MidiBuffer midiClipContent;
+
+    std::atomic<bool> midiEnabled { true };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiTrack)
 };
