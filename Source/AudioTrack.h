@@ -2,15 +2,16 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include <string>
 #include <memory>
+#include <atomic>
 #include <cmath>
+#include <string>
 
 #include "Track.h"
 
 // ============================================================
 // LA PAUTA STUDIO
-// AUDIOTRACK
+// AUDIOTRACK - FASE 1
 // ============================================================
 
 class AudioTrack : public Track
@@ -19,7 +20,6 @@ public:
 
     explicit AudioTrack(const std::string& name)
         : Track(juce::String(name)),
-          trackNameStr(name),
           readAheadThread("La Pauta Read Ahead")
     {
         formatManager.registerBasicFormats();
@@ -32,6 +32,8 @@ public:
         stopPlayback();
 
         transportSource.setSource(nullptr);
+        hasAudioSource.store(false);
+
         readerSource.reset();
 
         readAheadThread.stopThread(2000);
@@ -45,7 +47,8 @@ public:
         int samplesPerBlockExpected,
         double sampleRate)
     {
-        currentSampleRate = sampleRate;
+        currentSampleRate.store(
+            juce::jmax(1.0, sampleRate));
 
         transportSource.prepareToPlay(
             samplesPerBlockExpected,
@@ -54,7 +57,7 @@ public:
 
     void releaseResources()
     {
-        transportSource.stop();
+        stopPlayback();
         transportSource.releaseResources();
     }
 
@@ -68,21 +71,19 @@ public:
     {
         juce::ignoreUnused(midiMessages);
 
-        if (muted)
+        if (isMuted() ||
+            !isPlaying.load(std::memory_order_acquire))
         {
             buffer.clear();
             return;
         }
 
-        if (isPlaying && readerSource != nullptr)
-        {
-            juce::AudioSourceChannelInfo info(
-                &buffer,
-                0,
-                buffer.getNumSamples());
+        juce::AudioSourceChannelInfo info(
+            &buffer,
+            0,
+            buffer.getNumSamples());
 
-            transportSource.getNextAudioBlock(info);
-        }
+        transportSource.getNextAudioBlock(info);
 
         applyVolumeAndPan(buffer);
     }
@@ -96,23 +97,32 @@ public:
     {
         const int channels = buffer.getNumChannels();
 
+        if (channels <= 0)
+            return;
+
+        const float currentVolume =
+            volume.load(std::memory_order_relaxed);
+
+        const float currentPan =
+            pan.load(std::memory_order_relaxed);
+
         if (channels == 1)
         {
-            buffer.applyGain(volume);
+            buffer.applyGain(currentVolume);
             return;
         }
 
         const float leftPan =
-            juce::jlimit(0.0f, 1.0f, 1.0f - pan);
+            juce::jlimit(0.0f, 1.0f, 1.0f - currentPan);
 
         const float rightPan =
-            juce::jlimit(0.0f, 1.0f, 1.0f + pan);
+            juce::jlimit(0.0f, 1.0f, 1.0f + currentPan);
 
         const float leftGain =
-            volume * std::sqrt(leftPan);
+            currentVolume * std::sqrt(leftPan);
 
         const float rightGain =
-            volume * std::sqrt(rightPan);
+            currentVolume * std::sqrt(rightPan);
 
         buffer.applyGain(
             0, 0, buffer.getNumSamples(), leftGain);
@@ -123,7 +133,7 @@ public:
         for (int ch = 2; ch < channels; ++ch)
         {
             buffer.applyGain(
-                ch, 0, buffer.getNumSamples(), volume);
+                ch, 0, buffer.getNumSamples(), currentVolume);
         }
     }
 
@@ -135,7 +145,13 @@ public:
         const juce::AudioBuffer<float>& sourceBuffer,
         juce::AudioBuffer<float>& auxBusBuffer)
     {
-        if (muted || auxSendLevel <= 0.0f)
+        if (isMuted())
+            return;
+
+        const float sendLevel =
+            auxSendLevel.load(std::memory_order_relaxed);
+
+        if (sendLevel <= 0.0f)
             return;
 
         const int channels = juce::jmin(
@@ -149,13 +165,8 @@ public:
         for (int ch = 0; ch < channels; ++ch)
         {
             auxBusBuffer.addFrom(
-                ch,
-                0,
-                sourceBuffer,
-                ch,
-                0,
-                samples,
-                auxSendLevel);
+                ch, 0, sourceBuffer, ch, 0, samples,
+                sendLevel);
         }
     }
 
@@ -178,10 +189,12 @@ public:
 
         auto newSource =
             std::make_unique<juce::AudioFormatReaderSource>(
-                reader.release(),
-                true);
+                reader.release(), true);
 
-        transportSource.stop();
+        stopPlayback();
+
+        hasAudioSource.store(false);
+
         transportSource.setSource(nullptr);
         readerSource.reset();
 
@@ -194,7 +207,8 @@ public:
         readerSource = std::move(newSource);
 
         audioFile = file;
-        isPlaying = false;
+
+        hasAudioSource.store(true, std::memory_order_release);
 
         return true;
     }
@@ -205,23 +219,24 @@ public:
 
     void startPlayback()
     {
-        if (readerSource == nullptr)
+        if (!hasAudioSource.load(std::memory_order_acquire))
             return;
 
         transportSource.setPosition(0.0);
         transportSource.start();
-        isPlaying = true;
+
+        isPlaying.store(true, std::memory_order_release);
     }
 
     void stopPlayback()
     {
+        isPlaying.store(false, std::memory_order_release);
         transportSource.stop();
-        isPlaying = false;
     }
 
     bool isCurrentlyPlaying() const
     {
-        return isPlaying;
+        return isPlaying.load(std::memory_order_acquire);
     }
 
     // ========================================================
@@ -230,17 +245,17 @@ public:
 
     bool getIsRecording() const
     {
-        return isRecordingState;
+        return isRecordingState.load(std::memory_order_acquire);
     }
 
     void setIsRecording(bool shouldRecord)
     {
-        isRecordingState = shouldRecord;
+        isRecordingState.store(shouldRecord, std::memory_order_release);
     }
 
     void stopRecording()
     {
-        isRecordingState = false;
+        isRecordingState.store(false, std::memory_order_release);
     }
 
     void processRecording(
@@ -248,11 +263,9 @@ public:
         int numChannels,
         int numSamples)
     {
-        // La escritura de archivos WAV todavía no está implementada.
-        juce::ignoreUnused(
-            inputData,
-            numChannels,
-            numSamples);
+        // Grabación WAV pendiente de implementar mediante
+        // un escritor en segundo plano.
+        juce::ignoreUnused(inputData, numChannels, numSamples);
     }
 
     // ========================================================
@@ -274,67 +287,92 @@ public:
 
     void setVolume(float newVolume)
     {
-        volume = juce::jlimit(0.0f, 1.5f, newVolume);
+        volume.store(
+            juce::jlimit(0.0f, 1.5f, newVolume),
+            std::memory_order_relaxed);
     }
 
     float getVolume() const
     {
-        return volume;
+        return volume.load(std::memory_order_relaxed);
     }
 
     void setPan(float newPan)
     {
-        pan = juce::jlimit(-1.0f, 1.0f, newPan);
+        pan.store(
+            juce::jlimit(-1.0f, 1.0f, newPan),
+            std::memory_order_relaxed);
     }
 
     float getPan() const
     {
-        return pan;
+        return pan.load(std::memory_order_relaxed);
     }
 
     void setAuxSendLevel(float level)
     {
-        auxSendLevel = juce::jlimit(0.0f, 1.0f, level);
+        auxSendLevel.store(
+            juce::jlimit(0.0f, 1.0f, level),
+            std::memory_order_relaxed);
     }
 
     float getAuxSendLevel() const
     {
-        return auxSendLevel;
+        return auxSendLevel.load(std::memory_order_relaxed);
     }
+
+    // ========================================================
+    // MUTE
+    // ========================================================
 
     void setMute(bool shouldMute)
     {
-        muted = shouldMute;
+        mutedState.store(shouldMute, std::memory_order_relaxed);
+    }
+
+    void setMuted(bool shouldMute) override
+    {
+        setMute(shouldMute);
     }
 
     bool isMuted() const override
     {
-        return muted;
+        return mutedState.load(std::memory_order_relaxed);
     }
+
+    // ========================================================
+    // SOLO
+    // ========================================================
 
     void setSolo(bool shouldSolo)
     {
-        soloed = shouldSolo;
+        soloed.store(shouldSolo, std::memory_order_relaxed);
     }
 
     bool isSoloed() const
     {
-        return soloed;
+        return soloed.load(std::memory_order_relaxed);
     }
+
+    // ========================================================
+    // ARCHIVO
+    // ========================================================
 
     juce::File getCurrentAudioFilePath() const
     {
         return audioFile;
     }
 
-private:
+    double getCurrentSampleRate() const
+    {
+        return currentSampleRate.load(std::memory_order_relaxed);
+    }
 
-    juce::String trackNameStr;
+private:
 
     juce::AudioFormatManager formatManager;
 
-    std::unique_ptr<juce::AudioFormatReaderSource>
-        readerSource;
+    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
 
     juce::AudioTransportSource transportSource;
 
@@ -342,16 +380,16 @@ private:
 
     juce::File audioFile;
 
-    double currentSampleRate = 44100.0;
+    std::atomic<double> currentSampleRate { 44100.0 };
+    std::atomic<float> volume { 0.8f };
+    std::atomic<float> pan { 0.0f };
+    std::atomic<float> auxSendLevel { 0.0f };
 
-    float volume = 0.8f;
-    float pan = 0.0f;
-    float auxSendLevel = 0.0f;
-
-    bool isPlaying = false;
-    bool isRecordingState = false;
-    bool muted = false;
-    bool soloed = false;
+    std::atomic<bool> isPlaying { false };
+    std::atomic<bool> isRecordingState { false };
+    std::atomic<bool> mutedState { false };
+    std::atomic<bool> soloed { false };
+    std::atomic<bool> hasAudioSource { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioTrack)
 };
