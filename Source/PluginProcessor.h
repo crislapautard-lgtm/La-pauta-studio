@@ -2,6 +2,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+
 #include <array>
 #include <memory>
 #include <vector>
@@ -56,7 +57,7 @@ public:
     bool hasEditor() const override;
 
     // ========================================================
-    // INFORMACION
+    // INFORMACION DEL PLUGIN
     // ========================================================
 
     const juce::String getName() const override;
@@ -116,13 +117,25 @@ public:
 
     std::array<bool, MAX_TRACKS> trackRecording {};
 
+    // ========================================================
+    // SUBGRUPOS Y AUXILIARES
+    // ========================================================
+
     std::array<float, MAX_SUBGROUPS> subgroupVolume {};
 
     std::array<float, MAX_AUXES> auxVolume {};
 
+    // ========================================================
+    // MASTER Y TEMPO
+    // ========================================================
+
     float masterVolume = 0.9f;
 
     float currentBPM = 120.0f;
+
+    // ========================================================
+    // MOTOR Y COLECCION DE PISTAS
+    // ========================================================
 
     std::vector<std::unique_ptr<Track>> tracks;
 
@@ -208,6 +221,9 @@ private:
 
     int currentBlockSize = 512;
 
+    // Proteccion disponible para operaciones sobre pistas.
+    // Todavia debe integrarse correctamente en las operaciones
+    // de acceso y modificacion del motor.
     juce::CriticalSection trackLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(
