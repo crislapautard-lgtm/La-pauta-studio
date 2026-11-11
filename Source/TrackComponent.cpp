@@ -1,27 +1,43 @@
-
 #include "TrackComponent.h"
+
+// ============================================================
+// CONSTRUCTOR
+// ============================================================
 
 TrackComponent::TrackComponent(const juce::String& name)
     : trackName(name)
 {
     setSize(110, 260);
 
-    volumeSlider.setSliderStyle(juce::Slider::LinearBarVertical);
-    volumeSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 55, 18);
-    volumeSlider.setRange(0.0, 1.0, 0.01);
+    // VOLUMEN
+    volumeSlider.setSliderStyle(
+        juce::Slider::LinearBarVertical);
+
+    volumeSlider.setTextBoxStyle(
+        juce::Slider::TextBoxBelow,
+        false, 55, 18);
+
+    volumeSlider.setRange(0.0, 1.5, 0.01);
     volumeSlider.setValue(0.8);
     volumeSlider.setTextValueSuffix(" Vol");
 
     volumeSlider.onValueChange = [this]
     {
         if (onVolumeChanged)
-            onVolumeChanged(static_cast<float>(volumeSlider.getValue()));
+            onVolumeChanged(
+                static_cast<float>(volumeSlider.getValue()));
     };
 
     addAndMakeVisible(volumeSlider);
 
-    panSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    panSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 45, 18);
+    // PANORAMA
+    panSlider.setSliderStyle(
+        juce::Slider::RotaryHorizontalVerticalDrag);
+
+    panSlider.setTextBoxStyle(
+        juce::Slider::TextBoxBelow,
+        false, 45, 18);
+
     panSlider.setRange(-1.0, 1.0, 0.01);
     panSlider.setValue(0.0);
     panSlider.setTextValueSuffix(" Pan");
@@ -29,71 +45,180 @@ TrackComponent::TrackComponent(const juce::String& name)
     panSlider.onValueChange = [this]
     {
         if (onPanChanged)
-            onPanChanged(static_cast<float>(panSlider.getValue()));
+            onPanChanged(
+                static_cast<float>(panSlider.getValue()));
     };
 
     addAndMakeVisible(panSlider);
 
+    // MUTE
     muteButton.setClickingTogglesState(true);
+
     muteButton.onClick = [this]
     {
         if (onMuteToggled)
             onMuteToggled(muteButton.getToggleState());
     };
+
     addAndMakeVisible(muteButton);
 
+    // SOLO
     soloButton.setClickingTogglesState(true);
+
     soloButton.onClick = [this]
     {
         if (onSoloToggled)
             onSoloToggled(soloButton.getToggleState());
     };
+
     addAndMakeVisible(soloButton);
 
+    // RECORD
     recButton.setClickingTogglesState(true);
+
     recButton.onClick = [this]
     {
         if (onRecordToggled)
             onRecordToggled(recButton.getToggleState());
     };
+
     addAndMakeVisible(recButton);
 }
 
 TrackComponent::~TrackComponent() = default;
 
+// ============================================================
+// SINCRONIZAR VALORES
+// ============================================================
+
+void TrackComponent::setControlValues(
+    float volume,
+    float pan,
+    bool mute,
+    bool solo,
+    bool record)
+{
+    volumeSlider.setValue(
+        juce::jlimit(0.0f, 1.5f, volume),
+        juce::dontSendNotification);
+
+    panSlider.setValue(
+        juce::jlimit(-1.0f, 1.0f, pan),
+        juce::dontSendNotification);
+
+    muteButton.setToggleState(
+        mute, juce::dontSendNotification);
+
+    soloButton.setToggleState(
+        solo, juce::dontSendNotification);
+
+    recButton.setToggleState(
+        record, juce::dontSendNotification);
+}
+
+// ============================================================
+// MODO MASTER
+// ============================================================
+
+void TrackComponent::setMasterMode(bool shouldBeMaster)
+{
+    masterMode = shouldBeMaster;
+
+    panSlider.setVisible(!masterMode);
+    muteButton.setVisible(!masterMode);
+    soloButton.setVisible(!masterMode);
+    recButton.setVisible(!masterMode);
+
+    if (masterMode)
+        volumeSlider.setTextValueSuffix(" Master");
+    else
+        volumeSlider.setTextValueSuffix(" Vol");
+
+    resized();
+    repaint();
+}
+
+// ============================================================
+// PINTURA
+// ============================================================
+
 void TrackComponent::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff202735));
+    g.fillAll(juce::Colour(0xff101722));
 
-    g.setColour(juce::Colour(0xff263b55));
-    g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 8.0f);
+    g.setColour(juce::Colour(0xff203249));
+
+    g.fillRoundedRectangle(
+        getLocalBounds().toFloat().reduced(1.0f),
+        8.0f);
 
     g.setColour(juce::Colour(0xff55c8ff));
-    g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 8.0f, 1.5f);
+
+    g.drawRoundedRectangle(
+        getLocalBounds().toFloat().reduced(1.0f),
+        8.0f,
+        1.5f);
 
     g.setColour(juce::Colours::white);
     g.setFont(juce::Font(13.0f, juce::Font::bold));
-    g.drawText(trackName, 4, 5, getWidth() - 8, 20,
-               juce::Justification::centred, true);
+
+    g.drawText(
+        trackName,
+        4, 5,
+        getWidth() - 8,
+        20,
+        juce::Justification::centred,
+        true);
+
+    if (masterMode)
+    {
+        g.setColour(juce::Colour(0xffffc857));
+        g.setFont(juce::Font(10.0f, juce::Font::bold));
+
+        g.drawText(
+            "MASTER OUTPUT",
+            4, 27,
+            getWidth() - 8,
+            18,
+            juce::Justification::centred);
+    }
 }
+
+// ============================================================
+// DISTRIBUCION
+// ============================================================
 
 void TrackComponent::resized()
 {
     auto bounds = getLocalBounds().reduced(6);
-    bounds.removeFromTop(25);
+
+    bounds.removeFromTop(masterMode ? 42 : 25);
+
+    if (masterMode)
+    {
+        volumeSlider.setBounds(bounds);
+        return;
+    }
 
     recButton.setBounds(bounds.removeFromTop(24));
+
     bounds.removeFromTop(5);
 
     auto muteSolo = bounds.removeFromTop(24);
+
     const int halfWidth = muteSolo.getWidth() / 2;
 
-    muteButton.setBounds(muteSolo.removeFromLeft(halfWidth));
+    muteButton.setBounds(
+        muteSolo.removeFromLeft(halfWidth));
+
     soloButton.setBounds(muteSolo);
 
     bounds.removeFromTop(5);
-    panSlider.setBounds(bounds.removeFromTop(75));
+
+    panSlider.setBounds(
+        bounds.removeFromTop(75));
 
     bounds.removeFromTop(5);
+
     volumeSlider.setBounds(bounds);
 }
