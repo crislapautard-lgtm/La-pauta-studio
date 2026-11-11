@@ -10,7 +10,7 @@
 
 // ============================================================
 // LA PAUTA STUDIO
-// AUDIO ENGINE
+// AUDIO ENGINE - FASE 1
 // ============================================================
 
 class AudioEngine
@@ -33,7 +33,7 @@ public:
         double sampleRate,
         int numChannels = 2)
     {
-        juce::ignoreUnused(sampleRate);
+        currentSampleRate = juce::jmax(1.0, sampleRate);
 
         const int channels = juce::jmax(1, numChannels);
         const int samples = juce::jmax(1, samplesPerBlock);
@@ -43,11 +43,12 @@ public:
             samples,
             false,
             true,
-            false
-        );
+            false);
 
         trackBuffer.clear();
-        prepared = true;
+        trackMidiBuffer.clear();
+
+        prepared.store(true, std::memory_order_release);
     }
 
     // ========================================================
@@ -56,12 +57,14 @@ public:
 
     void releaseResources()
     {
-        prepared = false;
+        prepared.store(false, std::memory_order_release);
+
         trackBuffer.setSize(0, 0);
+        trackMidiBuffer.clear();
     }
 
     // ========================================================
-    // PROCESAR AUDIO
+    // PROCESAMIENTO PRINCIPAL
     // ========================================================
 
     void processBlock(
@@ -75,71 +78,121 @@ public:
         if (numChannels <= 0 || numSamples <= 0)
             return;
 
-        if (!prepared
-            || trackBuffer.getNumChannels() < numChannels
-            || trackBuffer.getNumSamples() < numSamples)
+        if (!prepared.load(std::memory_order_acquire))
         {
             buffer.clear();
             midiMessages.clear();
             return;
         }
 
-        // Guardar entrada antes de limpiar la mezcla.
+        if (trackBuffer.getNumChannels() < numChannels ||
+            trackBuffer.getNumSamples() < numSamples)
+        {
+            buffer.clear();
+            midiMessages.clear();
+            return;
+        }
+
+        // ====================================================
+        // 1. CAPTURAR ENTRADA ANTES DE LIMPIAR LA SALIDA
+        // ====================================================
+
         const float* const* inputData =
             buffer.getArrayOfReadPointers();
 
-        // Enviar entrada a las pistas que estén grabando.
         for (const auto& track : tracks)
         {
+            if (track == nullptr)
+                continue;
+
             if (auto* audioTrack =
-                    dynamic_cast<AudioTrack*>(track.get()))
+                dynamic_cast<AudioTrack*>(track.get()))
             {
                 if (audioTrack->getIsRecording())
                 {
                     audioTrack->processRecording(
                         inputData,
                         numChannels,
-                        numSamples
-                    );
+                        numSamples);
                 }
             }
         }
 
-        // Construir mezcla desde cero.
-        buffer.clear();
+        // ====================================================
+        // 2. DETECTAR SI EXISTE ALGUNA PISTA EN SOLO
+        // ====================================================
 
-        // Procesar cada pista individualmente.
+        bool anySolo = false;
+
         for (const auto& track : tracks)
         {
             if (track == nullptr)
                 continue;
 
-            // Limpiar TODOS los canales del buffer temporal.
+            if (auto* audioTrack =
+                dynamic_cast<AudioTrack*>(track.get()))
+            {
+                if (audioTrack->isSoloed())
+                {
+                    anySolo = true;
+                    break;
+                }
+            }
+        }
+
+        // ====================================================
+        // 3. PREPARAR SALIDA
+        // ====================================================
+
+        buffer.clear();
+
+        // ====================================================
+        // 4. MEZCLAR PISTAS
+        // ====================================================
+
+        for (const auto& track : tracks)
+        {
+            if (track == nullptr)
+                continue;
+
             trackBuffer.clear();
+            trackMidiBuffer.clear();
 
-            // Buffer MIDI temporal de la pista.
-            juce::MidiBuffer trackMidi;
+            // MUTE
+            if (track->isMuted())
+                continue;
 
+            // SOLO
+            if (anySolo)
+            {
+                auto* audioTrack =
+                    dynamic_cast<AudioTrack*>(track.get());
+
+                if (audioTrack == nullptr ||
+                    !audioTrack->isSoloed())
+                {
+                    continue;
+                }
+            }
+
+            // PROCESAR PISTA
             track->processBlock(
                 trackBuffer,
-                trackMidi
-            );
+                trackMidiBuffer);
 
-            // Transferir MIDI al bloque principal.
-            for (const auto metadata : trackMidi)
+            // MEZCLAR MIDI
+            for (const auto metadata : trackMidiBuffer)
             {
                 midiMessages.addEvent(
                     metadata.getMessage(),
-                    metadata.samplePosition
-                );
+                    metadata.samplePosition);
             }
 
-            // Sumar audio de la pista a la mezcla.
+            // MEZCLAR AUDIO
             const int channelsToMix =
                 juce::jmin(
                     numChannels,
-                    trackBuffer.getNumChannels()
-                );
+                    trackBuffer.getNumChannels());
 
             for (int channel = 0;
                  channel < channelsToMix;
@@ -151,17 +204,30 @@ public:
                     trackBuffer,
                     channel,
                     0,
-                    numSamples
-                );
+                    numSamples);
             }
         }
+    }
+
+    double getSampleRate() const
+    {
+        return currentSampleRate;
+    }
+
+    bool isPrepared() const
+    {
+        return prepared.load(std::memory_order_acquire);
     }
 
 private:
 
     juce::AudioBuffer<float> trackBuffer;
 
-    bool prepared = false;
+    juce::MidiBuffer trackMidiBuffer;
+
+    std::atomic<bool> prepared { false };
+
+    double currentSampleRate = 44100.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)
 };
