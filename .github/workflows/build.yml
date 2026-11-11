@@ -12,11 +12,13 @@ jobs:
     runs-on: windows-latest
 
     steps:
+    # 1. Descargar el proyecto
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
         submodules: recursive
 
+    # 2. Descargar JUCE 9.0.5
     - name: Download JUCE 9.0.5
       uses: actions/checkout@v4
       with:
@@ -24,16 +26,93 @@ jobs:
         ref: 9.0.5
         path: JUCE
 
+    # 3. Configurar compilación x64
     - name: Configure CMake x64
       run: cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release
 
+    # 4. Compilar Standalone y VST3
     - name: Build Project
       run: cmake --build build --config Release --parallel 2
 
-    - name: Upload Artifact
+    # 5. Preparar aplicación y plugin
+    - name: Prepare packages
+      shell: pwsh
+      run: |
+        $exe = Get-ChildItem -Path "build" -Filter "La Pauta Studio.exe" -File -Recurse |
+          Select-Object -First 1
+
+        if (-not $exe) {
+          throw "No se encontró La Pauta Studio.exe"
+        }
+
+        $standaloneDir = $exe.Directory.FullName
+
+        New-Item -ItemType Directory -Force -Path "OutputFiles" | Out-Null
+
+        Get-ChildItem -Path $standaloneDir -Force | ForEach-Object {
+          Copy-Item $_.FullName -Destination "OutputFiles" -Recurse -Force
+        }
+
+        $vst3 = Get-ChildItem -Path "build" -Directory -Filter "*.vst3" -Recurse |
+          Select-Object -First 1
+
+        if (-not $vst3) {
+          throw "No se encontró el plugin VST3"
+        }
+
+        New-Item -ItemType Directory -Force -Path "Package/VST3" | Out-Null
+
+        Copy-Item $vst3.FullName -Destination "Package/VST3" -Recurse -Force
+
+        New-Item -ItemType Directory -Force -Path "Package/Standalone" | Out-Null
+
+        Get-ChildItem -Path "OutputFiles" -Force | ForEach-Object {
+          Copy-Item $_.FullName -Destination "Package/Standalone" -Recurse -Force
+        }
+
+    # 6. Instalar Inno Setup
+    - name: Install Inno Setup
+      run: choco install innosetup --yes --no-progress
+
+    # 7. Crear instalador
+    - name: Build Windows Installer
+      shell: pwsh
+      run: |
+        $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+
+        if (-not (Test-Path $iscc)) {
+          $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+
+          if ($command) {
+            $iscc = $command.Source
+          }
+          else {
+            throw "No se encontró el compilador de Inno Setup"
+          }
+        }
+
+        if (-not (Test-Path "LaPautaStudio.iss")) {
+          throw "No se encontró LaPautaStudio.iss"
+        }
+
+        & $iscc "LaPautaStudio.iss"
+
+        if ($LASTEXITCODE -ne 0) {
+          throw "Falló la compilación del instalador"
+        }
+
+        if (-not (Test-Path "InstallerOutput/LaPautaStudio_Installer.exe")) {
+          throw "No se generó el instalador esperado"
+        }
+
+    # 8. Publicar los archivos
+    - name: Upload La Pauta Studio
       uses: actions/upload-artifact@v4
       with:
         name: La-Pauta-Studio-Windows-x64
-        path: build/La-Pauta-Studio_artefacts/Release/
+        path: |
+          InstallerOutput/LaPautaStudio_Installer.exe
+          Package/Standalone/
+          Package/VST3/
         if-no-files-found: error
         
