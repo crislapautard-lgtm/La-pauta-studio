@@ -1,4 +1,3 @@
-
 #include "MainComponent.h"
 
 // ============================================================
@@ -7,16 +6,16 @@
 
 namespace LaPautaColours
 {
-    const juce::Colour background  { 0xff101722 };
-    const juce::Colour panel       { 0xff182536 };
-    const juce::Colour panelLight  { 0xff203249 };
-    const juce::Colour blue        { 0xff28a9e0 };
-    const juce::Colour blueLight   { 0xff55c8ff };
-    const juce::Colour text        { 0xffe8f2fc };
-    const juce::Colour muted       { 0xff91a6bb };
-    const juce::Colour grid        { 0xff2b4057 };
-    const juce::Colour green       { 0xff32bd83 };
-    const juce::Colour red         { 0xffe65c68 };
+    const juce::Colour background { 0xff101722 };
+    const juce::Colour panel      { 0xff182536 };
+    const juce::Colour panelLight { 0xff203249 };
+    const juce::Colour blue       { 0xff28a9e0 };
+    const juce::Colour blueLight  { 0xff55c8ff };
+    const juce::Colour text       { 0xffe8f2fc };
+    const juce::Colour muted      { 0xff91a6bb };
+    const juce::Colour grid       { 0xff2b4057 };
+    const juce::Colour green      { 0xff32bd83 };
+    const juce::Colour red        { 0xffe65c68 };
 }
 
 // ============================================================
@@ -36,7 +35,6 @@ void ArrangementComponent::paint(juce::Graphics& g)
 
     g.fillAll(LaPautaColours::background);
 
-    // REGLA SUPERIOR
     g.setColour(LaPautaColours::panelLight);
     g.fillRect(0, 0, getWidth(), rulerHeight);
 
@@ -46,34 +44,30 @@ void ArrangementComponent::paint(juce::Graphics& g)
     g.drawText(
         "COMPAS",
         8, 0, labelWidth - 12, rulerHeight,
-        juce::Justification::centredLeft
-    );
+        juce::Justification::centredLeft);
 
-    // COMPASES
     const int pixelsPerBar = 100;
 
     for (int bar = 1; bar <= 18; ++bar)
     {
-        const int x = labelWidth + ((bar - 1) * pixelsPerBar);
+        const int x =
+            labelWidth + ((bar - 1) * pixelsPerBar);
 
         g.setColour(LaPautaColours::muted);
 
         g.drawText(
             juce::String(bar),
             x + 5, 0, 40, rulerHeight,
-            juce::Justification::centredLeft
-        );
+            juce::Justification::centredLeft);
 
         g.setColour(LaPautaColours::grid);
 
         g.drawVerticalLine(
             x,
             static_cast<float>(rulerHeight),
-            static_cast<float>(getHeight())
-        );
+            static_cast<float>(getHeight()));
     }
 
-    // PISTAS
     for (int i = 0; i < 16; ++i)
     {
         const int y = rulerHeight + (i * laneHeight);
@@ -81,26 +75,18 @@ void ArrangementComponent::paint(juce::Graphics& g)
         g.setColour(
             i % 2 == 0
                 ? juce::Colour(0xff192636)
-                : juce::Colour(0xff152231)
-        );
+                : juce::Colour(0xff152231));
 
-        g.fillRect(
-            0, y, getWidth(), laneHeight
-        );
+        g.fillRect(0, y, getWidth(), laneHeight);
 
         g.setColour(LaPautaColours::grid);
 
         g.drawHorizontalLine(
-            y,
-            0.0f,
-            static_cast<float>(getWidth())
-        );
+            y, 0.0f, static_cast<float>(getWidth()));
 
         g.setColour(LaPautaColours::blueLight);
 
-        g.fillRect(
-            0, y + 1, 3, laneHeight - 2
-        );
+        g.fillRect(0, y + 1, 3, laneHeight - 2);
 
         g.setColour(LaPautaColours::text);
         g.setFont(12.0f);
@@ -108,20 +94,15 @@ void ArrangementComponent::paint(juce::Graphics& g)
         g.drawText(
             "PISTA " + juce::String(i + 1),
             10, y, labelWidth - 18, laneHeight,
-            juce::Justification::centredLeft
-        );
+            juce::Justification::centredLeft);
 
         g.setColour(LaPautaColours::muted);
         g.setFont(10.0f);
 
         g.drawText(
             "Sin clips",
-            labelWidth + 12,
-            y,
-            100,
-            laneHeight,
-            juce::Justification::centredLeft
-        );
+            labelWidth + 12, y, 100, laneHeight,
+            juce::Justification::centredLeft);
     }
 
     g.setColour(LaPautaColours::grid);
@@ -129,8 +110,7 @@ void ArrangementComponent::paint(juce::Graphics& g)
     g.drawVerticalLine(
         labelWidth,
         0.0f,
-        static_cast<float>(getHeight())
-    );
+        static_cast<float>(getHeight()));
 }
 
 // ============================================================
@@ -142,56 +122,49 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
 {
     setSize(1200, 800);
 
-    // --------------------------------------------------------
     // BPM
-    // --------------------------------------------------------
-
     bpmLabel.setText("BPM", juce::dontSendNotification);
+
     bpmLabel.setColour(
         juce::Label::textColourId,
-        LaPautaColours::blueLight
-    );
-    bpmLabel.setJustificationType(juce::Justification::centred);
+        LaPautaColours::blueLight);
+
+    bpmLabel.setJustificationType(
+        juce::Justification::centred);
 
     addAndMakeVisible(bpmLabel);
     addAndMakeVisible(bpmSlider);
 
     bpmSlider.setSliderStyle(
-        juce::Slider::RotaryHorizontalVerticalDrag
-    );
+        juce::Slider::RotaryHorizontalVerticalDrag);
 
     bpmSlider.setTextBoxStyle(
         juce::Slider::TextBoxBelow,
-        false,
-        55,
-        18
-    );
+        false, 55, 18);
 
     bpmSlider.setRange(40.0, 240.0, 1.0);
-    bpmSlider.setValue(audioProcessor.currentBPM);
+
+    bpmSlider.setValue(
+        audioProcessor.currentBPM,
+        juce::dontSendNotification);
 
     bpmSlider.onValueChange = [this]
     {
-        audioProcessor.currentBPM =
-            static_cast<float>(bpmSlider.getValue());
+        audioProcessor.setBPM(
+            static_cast<float>(bpmSlider.getValue()));
     };
 
-    // --------------------------------------------------------
     // TRANSPORTE VISUAL
-    // --------------------------------------------------------
-
     auto configureButton = [](juce::TextButton& button,
                               juce::Colour colour)
     {
         button.setColour(
             juce::TextButton::buttonColourId,
-            colour
-        );
+            colour);
 
         button.setColour(
             juce::TextButton::textColourOffId,
-            LaPautaColours::text
-        );
+            LaPautaColours::text);
     };
 
     configureButton(playButton, LaPautaColours::green);
@@ -231,25 +204,18 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
         showTransportPending("LOOP");
     };
 
-    // --------------------------------------------------------
     // NAVEGADOR VST3
-    // --------------------------------------------------------
-
     pluginBrowserLabel.setText(
         "VST3",
-        juce::dontSendNotification
-    );
+        juce::dontSendNotification);
 
     pluginBrowserLabel.setColour(
         juce::Label::textColourId,
-        LaPautaColours::blueLight
-    );
+        LaPautaColours::blueLight);
 
     pluginBrowserLabel.setFont(
         juce::Font(
-            juce::FontOptions(14.0f).withStyle("Bold")
-        )
-    );
+            juce::FontOptions(14.0f).withStyle("Bold")));
 
     addAndMakeVisible(pluginBrowserLabel);
 
@@ -257,8 +223,7 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
 
     scanPluginsButton.setColour(
         juce::TextButton::buttonColourId,
-        LaPautaColours::blue
-    );
+        LaPautaColours::blue);
 
     scanPluginsButton.onClick = [this]
     {
@@ -268,68 +233,46 @@ MainComponent::MainComponent(AudioPluginAudioProcessor& p)
     addAndMakeVisible(scanPluginsButton);
 
     pluginList.setTextWhenNothingSelected(
-        "Seleccionar plugin VST3"
-    );
+        "Seleccionar plugin VST3");
 
     addAndMakeVisible(pluginList);
 
     scanStatusLabel.setText(
         "Escaneo VST3 pendiente",
-        juce::dontSendNotification
-    );
+        juce::dontSendNotification);
 
     scanStatusLabel.setColour(
         juce::Label::textColourId,
-        LaPautaColours::muted
-    );
+        LaPautaColours::muted);
 
     addAndMakeVisible(scanStatusLabel);
 
-    // --------------------------------------------------------
     // ESTADO
-    // --------------------------------------------------------
-
     statusLabel.setText(
         "LA PAUTA STUDIO - Proyecto preparado",
-        juce::dontSendNotification
-    );
+        juce::dontSendNotification);
 
     statusLabel.setColour(
         juce::Label::textColourId,
-        LaPautaColours::muted
-    );
+        LaPautaColours::muted);
 
     addAndMakeVisible(statusLabel);
 
-    // --------------------------------------------------------
     // TIMELINE
-    // --------------------------------------------------------
-
     arrangementViewport.setViewedComponent(
         &arrangementContent,
-        false
-    );
+        false);
 
-    arrangementViewport.setScrollBarsShown(
-        true,
-        true
-    );
+    arrangementViewport.setScrollBarsShown(true, true);
 
     addAndMakeVisible(arrangementViewport);
 
-    // --------------------------------------------------------
     // MIXER
-    // --------------------------------------------------------
-
     trackViewport.setViewedComponent(
         &trackContainer,
-        false
-    );
+        false);
 
-    trackViewport.setScrollBarsShown(
-        false,
-        true
-    );
+    trackViewport.setScrollBarsShown(false, true);
 
     addAndMakeVisible(trackViewport);
 
@@ -347,25 +290,109 @@ MainComponent::~MainComponent()
 }
 
 // ============================================================
-// CREAR 16 CANALES DE MIXER
+// CREAR Y CONECTAR LOS 16 CANALES
 // ============================================================
 
 void MainComponent::createTrackComponents()
 {
     trackComponents.clear();
 
-    for (int i = 0; i < 16; ++i)
+    // Garantizar que existan 16 posiciones reales de pista.
+    // Si ya existen pistas, se conservan.
+    for (int i = 0; i < AudioPluginAudioProcessor::MAX_TRACKS; ++i)
+    {
+        if (audioProcessor.getTrack(i) == nullptr)
+        {
+            const bool created = audioProcessor.addAudioTrack(
+                "TRACK " + juce::String(i + 1));
+
+            if (!created)
+                break;
+        }
+    }
+
+    const int availableTracks =
+        juce::jmin(
+            AudioPluginAudioProcessor::MAX_TRACKS,
+            static_cast<int>(audioProcessor.tracks.size()));
+
+    for (int i = 0; i < AudioPluginAudioProcessor::MAX_TRACKS; ++i)
     {
         auto channel = std::make_unique<TrackComponent>(
-            "TRACK " + juce::String(i + 1)
-        );
+            "TRACK " + juce::String(i + 1));
+
+        // Sincronizar valores iniciales.
+        channel->setControlValues(
+            audioProcessor.trackVolume[static_cast<size_t>(i)],
+            audioProcessor.trackPan[static_cast<size_t>(i)],
+            audioProcessor.trackMute[static_cast<size_t>(i)],
+            audioProcessor.trackSolo[static_cast<size_t>(i)],
+            audioProcessor.trackRecording[static_cast<size_t>(i)]);
+
+        // Conectar volumen.
+        channel->onVolumeChanged = [this, i](float value)
+        {
+            audioProcessor.setTrackVolume(i, value);
+        };
+
+        // Conectar panorama.
+        channel->onPanChanged = [this, i](float value)
+        {
+            audioProcessor.setTrackPan(i, value);
+        };
+
+        // Conectar MUTE.
+        channel->onMuteToggled = [this, i](bool state)
+        {
+            audioProcessor.setTrackMute(i, state);
+        };
+
+        // Conectar SOLO.
+        channel->onSoloToggled = [this, i](bool state)
+        {
+            audioProcessor.setTrackSolo(i, state);
+        };
+
+        // Conectar REC.
+        channel->onRecordToggled = [this, i](bool state)
+        {
+            audioProcessor.setTrackRecording(i, state);
+
+            statusLabel.setText(
+                state
+                    ? "REC activado en TRACK " + juce::String(i + 1)
+                    : "REC desactivado en TRACK " + juce::String(i + 1),
+                juce::dontSendNotification);
+        };
+
+        // Si el canal no tiene pista real, desactivar controles.
+        if (i >= availableTracks)
+        {
+            channel->setEnabled(false);
+        }
 
         trackContainer.addAndMakeVisible(*channel);
 
         trackComponents.push_back(std::move(channel));
     }
 
-    masterChannel = std::make_unique<TrackComponent>("MASTER");
+    // MASTER INDEPENDIENTE
+    masterChannel =
+        std::make_unique<TrackComponent>("MASTER");
+
+    masterChannel->setMasterMode(true);
+
+    masterChannel->setControlValues(
+        audioProcessor.masterVolume,
+        0.0f,
+        false,
+        false,
+        false);
+
+    masterChannel->onVolumeChanged = [this](float value)
+    {
+        audioProcessor.setMasterVolume(value);
+    };
 
     trackContainer.addAndMakeVisible(*masterChannel);
 
@@ -386,17 +413,17 @@ void MainComponent::updateTrackLayout()
 
     trackContainer.setSize(
         totalChannels * (channelWidth + spacing) + 10,
-        channelHeight
-    );
+        channelHeight);
 
-    for (int i = 0; i < static_cast<int>(trackComponents.size()); ++i)
+    for (int i = 0;
+         i < static_cast<int>(trackComponents.size());
+         ++i)
     {
         trackComponents[static_cast<size_t>(i)]->setBounds(
             5 + i * (channelWidth + spacing),
             0,
             channelWidth,
-            channelHeight
-        );
+            channelHeight);
     }
 
     if (masterChannel)
@@ -405,8 +432,7 @@ void MainComponent::updateTrackLayout()
             5 + 16 * (channelWidth + spacing),
             0,
             channelWidth,
-            channelHeight
-        );
+            channelHeight);
     }
 }
 
@@ -418,9 +444,9 @@ void MainComponent::showTransportPending(
     const juce::String& action)
 {
     statusLabel.setText(
-        action + " solicitado - transporte de audio pendiente de conexion",
-        juce::dontSendNotification
-    );
+        action +
+        " solicitado - transporte de audio pendiente de conexion",
+        juce::dontSendNotification);
 }
 
 // ============================================================
@@ -438,8 +464,7 @@ void MainComponent::scanVST3Plugins()
 
     scanStatusLabel.setText(
         "Escaneando plugins VST3...",
-        juce::dontSendNotification
-    );
+        juce::dontSendNotification);
 
     pluginList.clear(juce::dontSendNotification);
 
@@ -452,8 +477,7 @@ void MainComponent::scanVST3Plugins()
                 return;
 
             safeThis->updatePluginList();
-        }
-    );
+        });
 }
 
 // ============================================================
@@ -471,7 +495,8 @@ void MainComponent::updatePluginList()
 
     for (int i = 0; i < plugins.size(); ++i)
     {
-        const auto& description = plugins.getReference(i);
+        const auto& description =
+            plugins.getReference(i);
 
         juce::String itemName = description.name;
 
@@ -486,8 +511,7 @@ void MainComponent::updatePluginList()
 
     scanStatusLabel.setText(
         "Encontrados: " + juce::String(plugins.size()) + " VST3",
-        juce::dontSendNotification
-    );
+        juce::dontSendNotification);
 
     scanPluginsButton.setEnabled(true);
 }
@@ -502,17 +526,15 @@ void MainComponent::paint(juce::Graphics& g)
 
     // CABECERA
     g.setColour(LaPautaColours::text);
+
     g.setFont(
         juce::Font(
-            juce::FontOptions(23.0f).withStyle("Bold")
-        )
-    );
+            juce::FontOptions(23.0f).withStyle("Bold")));
 
     g.drawText(
         "LA PAUTA STUDIO",
         15, 5, 350, 30,
-        juce::Justification::centredLeft
-    );
+        juce::Justification::centredLeft);
 
     g.setColour(LaPautaColours::blueLight);
     g.setFont(11.0f);
@@ -520,57 +542,52 @@ void MainComponent::paint(juce::Graphics& g)
     g.drawText(
         "DIGITAL AUDIO WORKSTATION",
         17, 32, 350, 18,
-        juce::Justification::centredLeft
-    );
+        juce::Justification::centredLeft);
 
     // PANEL TRANSPORTE
     g.setColour(LaPautaColours::panel);
+
     g.fillRoundedRectangle(
         10.0f, 52.0f,
         static_cast<float>(getWidth() - 20),
         65.0f,
-        8.0f
-    );
+        8.0f);
 
     // PANEL TIMELINE
     g.setColour(LaPautaColours::panel);
+
     g.fillRoundedRectangle(
         10.0f, 122.0f,
         static_cast<float>(getWidth() - 20),
         static_cast<float>(trackViewport.getY() - 130),
-        8.0f
-    );
+        8.0f);
 
-    // TITULO ARRANGEMENT
     g.setColour(LaPautaColours::blueLight);
+
     g.setFont(
         juce::Font(
-            juce::FontOptions(14.0f).withStyle("Bold")
-        )
-    );
+            juce::FontOptions(14.0f).withStyle("Bold")));
 
     g.drawText(
         "ARRANGEMENT",
         20, 125, 200, 22,
-        juce::Justification::centredLeft
-    );
+        juce::Justification::centredLeft);
 
     // PANEL MIXER
     g.setColour(LaPautaColours::panel);
+
     g.fillRoundedRectangle(
         10.0f,
         static_cast<float>(trackViewport.getY() - 8),
         static_cast<float>(getWidth() - 20),
         static_cast<float>(trackViewport.getHeight() + 8),
-        8.0f
-    );
+        8.0f);
 
     g.setColour(LaPautaColours::blueLight);
+
     g.setFont(
         juce::Font(
-            juce::FontOptions(14.0f).withStyle("Bold")
-        )
-    );
+            juce::FontOptions(14.0f).withStyle("Bold")));
 
     g.drawText(
         "MIXER",
@@ -578,8 +595,7 @@ void MainComponent::paint(juce::Graphics& g)
         trackViewport.getY() - 7,
         150,
         20,
-        juce::Justification::centredLeft
-    );
+        juce::Justification::centredLeft);
 }
 
 // ============================================================
@@ -606,10 +622,13 @@ void MainComponent::resized()
     pluginBrowserLabel.setBounds(520, 58, 45, 22);
     scanPluginsButton.setBounds(565, 64, 95, 28);
     pluginList.setBounds(670, 64, 230, 28);
-    scanStatusLabel.setBounds(910, 64, width - 925, 28);
+
+    scanStatusLabel.setBounds(
+        910, 64, width - 925, 28);
 
     // ESTADO
-    statusLabel.setBounds(15, height - 18, width - 30, 16);
+    statusLabel.setBounds(
+        15, height - 18, width - 30, 16);
 
     // TIMELINE
     const int mixerHeight = 245;
@@ -620,16 +639,14 @@ void MainComponent::resized()
         18,
         timelineTop,
         width - 36,
-        juce::jmax(100, mixerTop - timelineTop - 12)
-    );
+        juce::jmax(100, mixerTop - timelineTop - 12));
 
     // MIXER
     trackViewport.setBounds(
         18,
         mixerTop + 22,
         width - 36,
-        mixerHeight - 27
-    );
+        mixerHeight - 27);
 
     updateTrackLayout();
 }
