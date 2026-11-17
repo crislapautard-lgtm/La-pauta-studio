@@ -1,64 +1,63 @@
-
 cmake_minimum_required(VERSION 3.22)
 
-project(La-Pauta-Studio VERSION 1.0.0)
+# Runtime estático: el .exe corre en Windows sin instalar Visual C++ Redistributable.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-# JUCE
-add_subdirectory(JUCE)
+project(LaPautaStudio VERSION 0.1.0 LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Plugin y aplicación Standalone
-juce_add_plugin(La-Pauta-Studio
-    COMPANY_NAME "La Pauta"
-    PLUGIN_MANUFACTURER_CODE Paut
-    PLUGIN_CODE Past
-    FORMATS Standalone VST3
+# Opcional: ruta al SDK de ASIO de Steinberg (descargado por ti, no se puede redistribuir).
+# Con ASIO activado verás los drivers ASIO de tu tarjeta además de WASAPI y DirectSound.
+set(LAPAUTA_ASIO_SDK "" CACHE PATH "Carpeta del SDK de ASIO (opcional)")
+
+include(FetchContent)
+FetchContent_Declare(JUCE
+    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+    GIT_TAG 8.0.8
+    GIT_SHALLOW ON)
+FetchContent_MakeAvailable(JUCE)
+
+juce_add_gui_app(LaPautaStudio
     PRODUCT_NAME "La Pauta Studio"
-    DESCRIPTION "La Pauta Studio"
-    IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT TRUE
-    NEEDS_MIDI_OUTPUT TRUE
-    IS_MIDI_EFFECT FALSE
-)
+    COMPANY_NAME "La Pauta"
+    VERSION 0.1.0)
 
-# Generar JuceHeader.h
-juce_generate_juce_header(La-Pauta-Studio)
+juce_generate_juce_header(LaPautaStudio)
 
-# Archivos del proyecto
-file(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.h"
-)
+target_sources(LaPautaStudio PRIVATE
+    Source/Main.cpp
+    Source/Engine.h
+    Source/PluginHost.h
+    Source/UI.h)
 
-target_sources(La-Pauta-Studio
-    PRIVATE
-        ${SOURCE_FILES}
-)
+target_compile_definitions(LaPautaStudio PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_PLUGINHOST_VST=0
+    JUCE_PLUGINHOST_LADSPA=0
+    JUCE_WASAPI=1
+    JUCE_DIRECTSOUND=1
+    JUCE_APPLICATION_NAME_STRING="La Pauta Studio"
+    JUCE_APPLICATION_VERSION_STRING="0.1.0")
 
-# Configuración del proyecto y alojamiento VST3
-target_compile_definitions(La-Pauta-Studio
-    PUBLIC
-        JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
-        JUCE_VST3_CAN_REPLACE_VST2=0
-        JUCE_PLUGINHOST_VST3=1
-        JUCE_PLUGINHOST_VST=0
-        JUCE_PLUGINHOST_AU=0
-)
+if(LAPAUTA_ASIO_SDK)
+    target_compile_definitions(LaPautaStudio PRIVATE JUCE_ASIO=1)
+    target_include_directories(LaPautaStudio PRIVATE "${LAPAUTA_ASIO_SDK}/common")
+endif()
 
-# Módulos JUCE
-target_link_libraries(La-Pauta-Studio
+if(MSVC)
+    target_compile_options(LaPautaStudio PRIVATE /utf-8)
+endif()
+
+target_link_libraries(LaPautaStudio
     PRIVATE
         juce::juce_audio_utils
         juce::juce_audio_processors
-        juce::juce_audio_basics
-        juce::juce_core
-        juce::juce_data_structures
-        juce::juce_events
-        juce::juce_graphics
-        juce::juce_gui_basics
+        juce::juce_audio_devices
+        juce::juce_audio_formats
         juce::juce_gui_extra
-
     PUBLIC
         juce::juce_recommended_config_flags
-        juce::juce_recommended_warning_flags
-)
+        juce::juce_recommended_warning_flags)
