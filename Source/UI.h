@@ -888,9 +888,11 @@ private:
         scanJob = std::make_unique<ScanJob> (engine.host, [this]
         {
             engine.host.saveList();
-            MessageManager::callAsync ([sp = SafePointer<MainComponent> (this)]
+            SafePointer<MainComponent> safeThis (this);
+            MessageManager::callAsync ([safeThis]
             {
-                if (auto* self = sp.getComponent()) self->showReport();
+                if (auto* self = safeThis.getComponent())
+                    self->showReport();
             });
         });
         scanJob->launchThread();
@@ -917,15 +919,35 @@ private:
     void openEditor (AudioPluginInstance& p)
     {
         for (auto& w : windows)
-            if (w->plugin == &p) { w->toFront (true); return; }
-
-        windows.push_back (std::make_unique<PluginWindow> (p, [this] (PluginWindow* w)
         {
-            MessageManager::callAsync ([sp = SafePointer<MainComponent> (this), w]
+            if (w->plugin == &p)
             {
-                if (auto* self = sp.getComponent()) self->closeWindow (w);
-            });
-        }));
+                w->toFront (true);
+                return;
+            }
+        }
+
+        // Crear el SafePointer antes de entrar en las lambdas.
+        SafePointer<MainComponent> safeThis (this);
+
+        windows.push_back (
+            std::make_unique<PluginWindow> (
+                p,
+                [safeThis] (PluginWindow* w)
+                {
+                    // No destruir la ventana dentro de closeButtonPressed().
+                    PluginWindow* windowToClose = w;
+
+                    MessageManager::callAsync (
+                        [safeThis, windowToClose]()
+                        {
+                            if (auto* self = safeThis.getComponent())
+                                self->closeWindow (windowToClose);
+                        }
+                    );
+                }
+            )
+        );
     }
 
     void closeWindow (PluginWindow* w)
