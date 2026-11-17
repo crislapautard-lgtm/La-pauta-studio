@@ -21,3 +21,15 @@ jobs:
         with:
           name: La-Pauta-Studio-Windows
           path: build/LaPautaStudio_artefacts/Release/
+
+      - name: Instalar Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Crear instalador
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
+
+      - name: Subir instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: La-Pauta-Studio-Instalador
+          path: installer_output/*.exe
