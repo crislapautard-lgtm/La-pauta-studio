@@ -310,6 +310,20 @@ public:
         return result;
     }
 
+    // Pasa un clip de una pista a otra (misma posición en el tiempo)
+    void moveClip (Track& from, Track& to, Clip* c)
+    {
+        if (&from == &to) return;
+        const SpinLock::ScopedLockType sl (lock);
+        for (size_t i = 0; i < from.clips.size(); ++i)
+            if (from.clips[i].get() == c)
+            {
+                to.clips.push_back (std::move (from.clips[i]));
+                from.clips.erase (from.clips.begin() + (long) i);
+                return;
+            }
+    }
+
     void addClip (Track& t, std::unique_ptr<Clip> c)
     {
         const SpinLock::ScopedLockType sl (lock);

@@ -65,6 +65,7 @@ struct RowOwner
 
     virtual void showEnvelopePanel (Track*) = 0;      // panel de automatización; nullptr = Master
     virtual void showMasterMenu() = 0;
+    virtual Track* trackAtScreenY (int screenY) = 0;  // pista (no bus) bajo esa altura de pantalla, o nullptr
 };
 
 // ---------------------------------------------------------------------------
@@ -722,7 +723,7 @@ public:
         repaint();
     }
 
-    void mouseUp (const MouseEvent&) override
+    void mouseUp (const MouseEvent& e) override
     {
         lanes.mouseUp();
         fadeClip = nullptr;
@@ -739,7 +740,20 @@ public:
             owner.clipsChanged();
             return;
         }
-        if (dragClip != nullptr) { dragClip = nullptr; owner.clipsChanged(); }
+        if (dragClip != nullptr)
+        {
+            auto* moved = dragClip;
+            dragClip = nullptr;
+
+            // soltado sobre otra pista: el clip pasa a esa pista (conserva su posición en el tiempo)
+            if (auto* dst = owner.trackAtScreenY (e.getScreenY()))
+                if (dst != &track && ownsClip (moved))
+                {
+                    eng.moveClip (track, *dst, moved);
+                    owner.setSelected (dst, moved);
+                }
+            owner.clipsChanged();
+        }
     }
 
 private:
@@ -1635,6 +1649,17 @@ public:
     }
 
     void showMasterMenu() override { showMasterFxMenu(); }
+
+    Track* trackAtScreenY (int sy) override
+    {
+        for (auto& r : rows)
+        {
+            const auto b = r->getScreenBounds();
+            if (sy >= b.getY() && sy < b.getBottom())
+                return r->getTrack().isBus.load() ? nullptr : &r->getTrack();
+        }
+        return nullptr;
+    }
 
     // Panel de envolventes (Reaper): todo lo automatizable de la pista (nullptr = Master)
     void showEnvelopePanel (Track* t) override
