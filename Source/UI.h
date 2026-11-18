@@ -11,6 +11,9 @@ namespace ui
     constexpr int rowH = 96;
     constexpr int rulerH = 28;
     constexpr int toolbarH = 40;
+    constexpr int laneH = 72;       // alto de un carril de automatización
+    constexpr int masterH = 64;     // alto de la cabecera de la fila Master
+    constexpr int addH = 70;        // alto del botón "+" al final de las pistas
 
     enum Tool { toolSelect = 0, toolHand = 1, toolCut = 2 };
 
@@ -59,6 +62,9 @@ struct RowOwner
     virtual void setSelected (Track*, Clip*) = 0;
     virtual void setLoopFromClip (Clip&) = 0;
     virtual void toggleLoop() = 0;
+
+    virtual void showEnvelopePanel (Track*) = 0;      // panel de automatización; nullptr = Master
+    virtual void showMasterMenu() = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -90,6 +96,292 @@ public:
 
 private:
     std::function<void (PluginWindow*)> onClose;
+};
+
+// ---------------------------------------------------------------------------
+// Rejilla de fondo (la usan las filas de pistas y la fila Master)
+// ---------------------------------------------------------------------------
+inline void drawTimeGrid (Graphics& g, RowOwner& owner, double pps, Rectangle<int> visible, int height)
+{
+    const double beat = owner.beatSeconds();
+    double step = owner.gridStepSeconds();
+    if (step <= 0.0) step = beat;          // en modo libre solo se dibujan los tiempos
+    if (step <= 0.0 || beat <= 0.0) return;
+    while (step * pps < 8.0) step *= 2.0;  // muy alejado: menos líneas
+
+    const int x0 = jmax (ui::headerW, visible.getX());
+    const int first = jmax (0, (int) std::floor ((x0 - ui::headerW) / (step * pps)) - 1);
+
+    for (int i = first;; ++i)
+    {
+        const double t = i * step;
+        const int x = ui::headerW + (int) (t * pps);
+        if (x > visible.getRight()) break;
+        if (x < x0) continue;
+
+        const double inBeats = t / beat;
+        const bool isBar  = std::abs (inBeats / 4.0 - std::round (inBeats / 4.0)) < 1.0e-6;
+        const bool isBeat = std::abs (inBeats - std::round (inBeats)) < 1.0e-6;
+
+        g.setColour (Colours::white.withAlpha (isBar ? 0.16f : (isBeat ? 0.09f : 0.04f)));
+        g.drawVerticalLine (x, 0.0f, (float) height);
+    }
+}
+
+// Texto legible del valor de una envolvente (dB, pan, estado, o el texto propio del parámetro del plugin)
+inline String envValueText (const Envelope& e, float v)
+{
+    switch (e.target)
+    {
+        case envVolume:
+        {
+            const double db = volumeRange().convertFrom0to1 ((double) v);
+            return db <= -59.9 ? String (T ("-inf dB")) : String (db, 1) + " dB";
+        }
+        case envPan:
+        {
+            const int p = (int) std::round (std::abs (v * 2.0f - 1.0f) * 100.0f);
+            if (p == 0) return T ("Centro");
+            return (v < 0.5f ? T ("Izq ") : T ("Der ")) + String (p) + "%";
+        }
+        case envMute:   return v >= 0.5f ? T ("Silenciado") : T ("Sonando");
+        case envBypass: return v >= 0.5f ? T ("Efecto apagado") : T ("Efecto encendido");
+        default:
+            if (e.param != nullptr)
+                return e.param->getText (v, 14) + " " + e.param->getLabel();
+            return String (v, 2);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Carriles de automatización bajo una pista (o bajo el Master): dibujan y editan las curvas.
+// 'target' = la pista, o nullptr para el Master. Clic en vacío = punto nuevo; arrastrar = mover;
+// clic derecho = menú. En mute y bypass el valor es de tipo escalón (encendido/apagado).
+// ---------------------------------------------------------------------------
+class EnvLanes
+{
+public:
+    EnvLanes (Engine& e, RowOwner& o, Component& c, Track* t) : eng (e), owner (o), comp (c), target (t) {}
+
+    std::vector<Envelope*> visibleLanes() const
+    {
+        std::vector<Envelope*> v;
+        for (auto& e : eng.envsOf (target))
+            if (e->visible) v.push_back (e.get());
+        return v;
+    }
+
+    int height() const { return (int) visibleLanes().size() * ui::laneH; }
+
+    // curves = false: fondo y cabeceras (antes de la rejilla); curves = true: líneas y puntos (encima)
+    void paint (Graphics& g, int top0, int width, double pps, bool curves)
+    {
+        auto lanes = visibleLanes();
+
+        for (size_t k = 0; k < lanes.size(); ++k)
+        {
+            const Envelope& e = *lanes[k];
+            const int top = top0 + (int) k * ui::laneH;
+            const bool on = e.active.load();
+
+            if (! curves)
+            {
+                g.setColour (Colour (0xff23272c));
+                g.fillRect (0, top, ui::headerW, ui::laneH);
+                g.setColour (Colour (0xff12171c));
+                g.fillRect (ui::headerW, top, jmax (0, width - ui::headerW), ui::laneH);
+                g.setColour (Colours::black);
+                g.drawHorizontalLine (top, 0.0f, (float) width);
+                g.drawVerticalLine (ui::headerW - 1, (float) top, (float) (top + ui::laneH));
+
+                g.setFont (12.0f);
+                g.setColour (on ? Colours::white : Colours::grey);
+                g.drawText (e.name, 8, top + 5, 190, 16, Justification::left, true);
+
+                g.setColour (on ? Colour (0xff2e9d4f) : Colour (0xff555555));
+                g.fillRoundedRectangle (202.0f, (float) top + 5.0f, 42.0f, 18.0f, 3.0f);
+                g.setColour (Colours::white);
+                g.setFont (11.0f);
+                g.drawText (on ? "ON" : "OFF", 202, top + 5, 42, 18, Justification::centred);
+
+                g.setColour (Colour (0xff444a52));
+                g.fillRoundedRectangle (248.0f, (float) top + 5.0f, 46.0f, 18.0f, 3.0f);
+                g.setColour (Colours::white);
+                g.setFont (10.0f);
+                g.drawText (T ("Ocultar"), 248, top + 5, 46, 18, Justification::centred);
+
+                String line;
+                if (dragEnv == &e)           line = envValueText (e, dragValue);
+                else if (e.points.empty())   line = T ("Sin puntos: haz clic en la curva para añadir");
+                else                         line = T ("En el cursor: ") + envValueText (e, e.valueAt (eng.position.load()));
+
+                g.setColour (Colours::orange);
+                g.setFont (11.0f);
+                g.drawText (line, 8, top + 28, ui::headerW - 16, 14, Justification::left, true);
+
+                g.setColour (Colours::grey);
+                g.setFont (10.0f);
+                g.drawText (T ("Clic: punto · Arrastrar: mover · Clic dcho: opciones"), 8, top + 46, ui::headerW - 12, 14,
+                            Justification::left, true);
+            }
+            else
+            {
+                g.setColour (Colours::white.withAlpha (0.07f));
+                g.drawHorizontalLine (top + ui::laneH / 2, (float) ui::headerW, (float) width);
+
+                if (e.points.empty()) continue;
+
+                auto yOf = [top] (float v) { return (float) top + 4.0f + (1.0f - v) * (float) (ui::laneH - 8); };
+                auto xOf = [&] (int64 s) { return (float) ui::headerW + (float) ((double) s / eng.sampleRate * pps); };
+
+                Path p;
+                p.startNewSubPath ((float) ui::headerW, yOf (e.points.front().value));
+                for (size_t i = 0; i < e.points.size(); ++i)
+                {
+                    const float x = xOf (e.points[i].sample);
+                    if (e.isStep() && i > 0) p.lineTo (x, yOf (e.points[i - 1].value));   // escalón
+                    p.lineTo (x, yOf (e.points[i].value));
+                }
+                p.lineTo ((float) width, yOf (e.points.back().value));
+
+                const Colour line = on ? Colour (0xffff9a2e) : Colours::grey;
+                g.setColour (line);
+                g.strokePath (p, PathStrokeType (1.6f));
+
+                for (size_t i = 0; i < e.points.size(); ++i)
+                {
+                    const bool held = (dragEnv == &e && dragIdx == (int) i);
+                    g.setColour (held ? Colours::white : line);
+                    g.fillEllipse (xOf (e.points[i].sample) - 4.0f, yOf (e.points[i].value) - 4.0f, 8.0f, 8.0f);
+                }
+            }
+        }
+    }
+
+    // 'e' viene de la fila (coordenadas de la fila); top0 = y donde empiezan los carriles.
+    bool mouseDown (const MouseEvent& e, int top0)
+    {
+        dragEnv = nullptr;
+        dragIdx = -1;
+
+        auto lanes = visibleLanes();
+        if (e.y < top0) return false;
+        const int k = (e.y - top0) / ui::laneH;
+        if (! isPositiveAndBelow (k, (int) lanes.size())) return false;
+
+        auto* env = lanes[(size_t) k];
+        const int top = top0 + k * ui::laneH;
+
+        if (e.x < ui::headerW)                                  // cabecera del carril
+        {
+            if (e.mods.isPopupMenu())  showMenu (env, -1);
+            else if (e.x >= 248)       { env->visible = false; owner.clipsChanged(); }
+            else if (e.x >= 202)       { env->active = ! env->active.load(); comp.repaint(); }
+            return true;
+        }
+
+        int idx = pointAt (*env, top, e.x, e.y);
+        if (e.mods.isPopupMenu()) { showMenu (env, idx); return true; }
+
+        if (idx < 0)                                            // clic en vacío = punto nuevo
+        {
+            const int64 s = sampleAt (e.x);
+            eng.envAddPoint (*env, s, valueFromY (*env, e.y - top));
+            env->active = true;                                 // al editar la curva se enciende sola
+            for (size_t i = 0; i < env->points.size(); ++i)
+                if (env->points[i].sample == s) { idx = (int) i; break; }
+        }
+
+        dragEnv = env;
+        dragIdx = idx;
+        dragTop = top;
+        dragValue = idx >= 0 ? env->points[(size_t) idx].value : 0.0f;
+        comp.repaint();
+        return true;
+    }
+
+    bool mouseDrag (const MouseEvent& e, int)
+    {
+        if (dragEnv == nullptr || dragIdx < 0) return false;
+
+        const float v = valueFromY (*dragEnv, e.y - dragTop);
+        eng.envSetPoint (*dragEnv, dragIdx, sampleAt (e.x), v);
+        dragValue = v;
+        comp.repaint();
+        return true;
+    }
+
+    void mouseUp()
+    {
+        if (dragEnv == nullptr) return;
+        dragEnv = nullptr;
+        dragIdx = -1;
+        comp.repaint();
+    }
+
+private:
+    int64 sampleAt (int x) const
+    {
+        const double secs = jmax (0.0, (x - ui::headerW) / owner.pps());
+        return owner.snapSample ((int64) (secs * eng.sampleRate));
+    }
+
+    static float valueFromY (const Envelope& env, int yInLane)
+    {
+        const float v = jlimit (0.0f, 1.0f, 1.0f - (float) (yInLane - 4) / (float) (ui::laneH - 8));
+        return env.isStep() ? (v >= 0.5f ? 1.0f : 0.0f) : v;
+    }
+
+    int pointAt (const Envelope& env, int top, int x, int y) const
+    {
+        for (size_t i = 0; i < env.points.size(); ++i)
+        {
+            const double px = ui::headerW + (double) env.points[i].sample / eng.sampleRate * owner.pps();
+            const double py = top + 4.0 + (1.0 - env.points[i].value) * (ui::laneH - 8);
+            if (std::abs (x - px) <= 6.0 && std::abs (y - py) <= 6.0)
+                return (int) i;
+        }
+        return -1;
+    }
+
+    bool exists (Envelope* env) const
+    {
+        for (auto& e : eng.envsOf (target))
+            if (e.get() == env) return true;
+        return false;
+    }
+
+    void showMenu (Envelope* env, int pointIdx)
+    {
+        PopupMenu m;
+        if (pointIdx >= 0) m.addItem (1, T ("Borrar este punto"));
+        m.addItem (2, T ("Borrar todos los puntos"));
+        m.addItem (3, env->active.load() ? T ("Apagar esta automatización") : T ("Encender esta automatización"));
+        m.addItem (4, T ("Ocultar carril"));
+
+        Component::SafePointer<Component> sp (&comp);
+        m.showMenuAsync (PopupMenu::Options(), [this, sp, env, pointIdx] (int r)
+        {
+            if (sp.getComponent() == nullptr || r == 0 || ! exists (env)) return;
+
+            if (r == 1)      eng.envRemovePoint (*env, pointIdx);
+            else if (r == 2) eng.envClear (*env);
+            else if (r == 3) env->active = ! env->active.load();
+            else if (r == 4) { env->visible = false; owner.clipsChanged(); return; }
+
+            comp.repaint();
+        });
+    }
+
+    Engine& eng;
+    RowOwner& owner;
+    Component& comp;
+    Track* target;
+
+    Envelope* dragEnv = nullptr;
+    int dragIdx = -1;
+    int dragTop = 0;
+    float dragValue = 0.0f;
 };
 
 // ---------------------------------------------------------------------------
@@ -137,6 +429,11 @@ public:
         btnSend.onClick = [this] { owner.showSendPanel (track, btnSend); };
         addAndMakeVisible (btnSend);
 
+        btnAuto.setButtonText ("Auto");
+        btnAuto.setTooltip (T ("Automatización: volumen, pan, mute y parámetros de los plugins"));
+        btnAuto.onClick = [this] { owner.showEnvelopePanel (&track); };
+        addAndMakeVisible (btnAuto);
+
         if (track.isBus.load())   // un bus no graba ni tiene solo/envíos
         {
             btnSolo.setVisible (false);
@@ -169,10 +466,14 @@ public:
 
     Track& getTrack() { return track; }
 
+    // alto de la fila: la pista + un carril por cada automatización visible
+    int desiredHeight() const { return ui::rowH + lanes.height(); }
+
     void resized() override
     {
-        nameLabel.setBounds (6, 4, track.isBus.load() ? 236 : 180, 22);
-        btnSend.setBounds (190, 4, 54, 22);
+        nameLabel.setBounds (6, 4, track.isBus.load() ? 182 : 128, 22);
+        btnSend.setBounds (138, 4, 50, 22);
+        btnAuto.setBounds (192, 4, 52, 22);
         btnMute.setBounds (6, 30, 32, 24);
         btnSolo.setBounds (42, 30, 32, 24);
         btnArm.setBounds (78, 30, 32, 24);
@@ -190,6 +491,17 @@ public:
         {
             lastL = l; lastR = r;
             repaint (248, 0, 52, ui::rowH);
+        }
+
+        // el texto de valor de los carriles sigue al cursor
+        if (lanes.height() > 0)
+        {
+            const int64 p = eng.position.load();
+            if (p != lastPos)
+            {
+                lastPos = p;
+                repaint (0, ui::rowH, ui::headerW, lanes.height());
+            }
         }
     }
 
@@ -218,13 +530,14 @@ public:
         const double pps = owner.pps();
         const auto visible = g.getClipBounds();
 
+        lanes.paint (g, ui::rowH, getWidth(), pps, false);   // fondo y cabeceras de los carriles
         drawGrid (g, pps, visible);
 
         for (auto& c : track.clips)
         {
             const double startSec = (double) c->startSample.load() / eng.sampleRate;
             const double lenSec = (double) c->audio.getNumSamples() / eng.sampleRate;
-            Rectangle<int> r (ui::headerW + (int) (startSec * pps), 4, jmax (2, (int) (lenSec * pps)), getHeight() - 8);
+            Rectangle<int> r (ui::headerW + (int) (startSec * pps), 4, jmax (2, (int) (lenSec * pps)), ui::rowH - 8);
 
             g.setColour (c.get() == owner.selectedClip() ? Colour (0xff3d7cb8) : Colour (0xff2b5a85));
             g.fillRect (r);
@@ -244,12 +557,17 @@ public:
             g.setColour (Colours::black.withAlpha (0.6f));
             g.drawRect (r);
         }
+
+        lanes.paint (g, ui::rowH, getWidth(), pps, true);    // curvas y puntos encima de todo
+
+        g.setColour (Colours::black);
+        g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
     }
 
     void mouseMove (const MouseEvent& e) override
     {
         MouseCursor::StandardCursorType cur = MouseCursor::NormalCursor;
-        if (e.x >= ui::headerW)
+        if (e.x >= ui::headerW && e.y < ui::rowH)
         {
             if (owner.getTool() == ui::toolHand)     cur = MouseCursor::DraggingHandCursor;
             else if (owner.getTool() == ui::toolCut) cur = MouseCursor::CrosshairCursor;
@@ -260,6 +578,7 @@ public:
     void mouseDown (const MouseEvent& e) override
     {
         dragClip = nullptr;
+        if (e.y >= ui::rowH) { lanes.mouseDown (e, ui::rowH); return; }   // zona de carriles
         if (e.x < ui::headerW) return;
 
         auto* c = clipAt (e.x);
@@ -296,6 +615,7 @@ public:
 
     void mouseDrag (const MouseEvent& e) override
     {
+        if (lanes.mouseDrag (e, ui::rowH)) return;
         if (dragClip == nullptr) return;
         const auto delta = (int64) (e.getDistanceFromDragStartX() / owner.pps() * eng.sampleRate);
         dragClip->startSample = jmax<int64> (0, owner.snapSample (dragOrigStart + delta));
@@ -304,6 +624,7 @@ public:
 
     void mouseUp (const MouseEvent&) override
     {
+        lanes.mouseUp();
         if (dragClip != nullptr) { dragClip = nullptr; owner.clipsChanged(); }
     }
 
@@ -331,29 +652,7 @@ private:
     // Líneas verticales de la rejilla (compases más marcados que tiempos y subdivisiones)
     void drawGrid (Graphics& g, double pps, Rectangle<int> visible)
     {
-        const double beat = owner.beatSeconds();
-        double step = owner.gridStepSeconds();
-        if (step <= 0.0) step = beat;          // en modo libre solo se dibujan los tiempos
-        if (step <= 0.0 || beat <= 0.0) return;
-        while (step * pps < 8.0) step *= 2.0;  // muy alejado: menos líneas
-
-        const int x0 = jmax (ui::headerW, visible.getX());
-        const int first = jmax (0, (int) std::floor ((x0 - ui::headerW) / (step * pps)) - 1);
-
-        for (int i = first;; ++i)
-        {
-            const double t = i * step;
-            const int x = ui::headerW + (int) (t * pps);
-            if (x > visible.getRight()) break;
-            if (x < x0) continue;
-
-            const double inBeats = t / beat;
-            const bool isBar  = std::abs (inBeats / 4.0 - std::round (inBeats / 4.0)) < 1.0e-6;
-            const bool isBeat = std::abs (inBeats - std::round (inBeats)) < 1.0e-6;
-
-            g.setColour (Colours::white.withAlpha (isBar ? 0.16f : (isBeat ? 0.09f : 0.04f)));
-            g.drawVerticalLine (x, 0.0f, (float) getHeight());
-        }
+        drawTimeGrid (g, owner, pps, visible, getHeight());
     }
 
     // Menú del clic derecho: herramientas + acciones sobre el clip
@@ -414,9 +713,11 @@ private:
     RowOwner& owner;
 
     Label nameLabel;
-    TextButton btnMute, btnSolo, btnArm, btnFx, btnDel, btnSend;
+    TextButton btnMute, btnSolo, btnArm, btnFx, btnDel, btnSend, btnAuto;
     Slider vol, pan;
     ComboBox inputBox;
+    EnvLanes lanes { eng, owner, *this, &track };
+    int64 lastPos = -1;
 
     Clip* dragClip = nullptr;
     int64 dragOrigStart = 0;
@@ -652,6 +953,330 @@ private:
 // ---------------------------------------------------------------------------
 // Ventana principal
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Panel de envolventes (como en Reaper): lista todo lo automatizable de una pista (o del Master):
+// volumen, pan, mute y, de cada efecto, su bypass y todos sus parámetros.
+// "Activa" enciende/apaga la automatización; "Visible" muestra su carril bajo la pista.
+// ---------------------------------------------------------------------------
+class EnvelopePanel : public Component, private ListBoxModel
+{
+public:
+    EnvelopePanel (Engine& e, RowOwner& o, Track* t) : eng (e), owner (o), target (t)
+    {
+        buildAll();
+        applyFilter();
+
+        search.setTextToShowWhenEmpty (T ("Buscar parámetro o efecto..."), Colours::grey);
+        search.onTextChange = [this] { applyFilter(); };
+        addAndMakeVisible (search);
+
+        list.setModel (this);
+        list.setRowHeight (24);
+        addAndMakeVisible (list);
+
+        info.setText (T ("Activa = la automatización se aplica · Visible = muestra su carril bajo la pista"),
+                      dontSendNotification);
+        info.setColour (Label::textColourId, Colours::grey);
+        info.setFont (11.0f);
+        addAndMakeVisible (info);
+
+        setSize (520, 480);
+    }
+
+    ~EnvelopePanel() override { list.setModel (nullptr); }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (6);
+        search.setBounds (r.removeFromTop (26));
+        r.removeFromTop (4);
+        info.setBounds (r.removeFromBottom (18));
+        list.setBounds (r);
+    }
+
+    void paint (Graphics& g) override { g.fillAll (Colour (0xff202020)); }
+
+private:
+    struct Entry
+    {
+        String label;
+        int target = envVolume;
+        AudioPluginInstance* plugin = nullptr;
+        int paramIndex = -1;
+        bool header = false;
+    };
+
+    void buildAll()
+    {
+        all.clear();
+        all.push_back ({ T ("Pista"), envVolume, nullptr, -1, true });
+        all.push_back ({ "Volumen", envVolume, nullptr, -1, false });
+        all.push_back ({ "Pan",     envPan,    nullptr, -1, false });
+        all.push_back ({ "Mute",    envMute,   nullptr, -1, false });
+
+        for (auto& p : eng.pluginsOf (target))
+        {
+            const String fx = p->getName();
+            all.push_back ({ fx, envBypass, p.get(), -1, true });
+            all.push_back ({ fx + " > Bypass (apagar/encender)", envBypass, p.get(), -1, false });
+
+            auto& ps = p->getParameters();
+            for (int i = 0; i < ps.size(); ++i)
+            {
+                const String n = ps[i]->getName (40);
+                if (n.isEmpty()) continue;
+                all.push_back ({ fx + " > " + n, envParam, p.get(), i, false });
+            }
+        }
+    }
+
+    void applyFilter()
+    {
+        shown.clear();
+        const String f = search.getText().trim();
+        for (auto& e : all)
+            if (f.isEmpty() || (! e.header && e.label.containsIgnoreCase (f)))
+                shown.push_back (e);
+        list.updateContent();
+        list.repaint();
+    }
+
+    Envelope* envOf (const Entry& e)
+    {
+        return eng.findEnvelope (eng.envsOf (target), e.target, e.plugin, e.target == envParam ? e.paramIndex : -1);
+    }
+
+    int getNumRows() override { return (int) shown.size(); }
+
+    void paintListBoxItem (int row, Graphics& g, int w, int h, bool) override
+    {
+        if (! isPositiveAndBelow (row, (int) shown.size())) return;
+        const auto& e = shown[(size_t) row];
+
+        if (e.header)
+        {
+            g.setColour (Colour (0xff343a42));
+            g.fillRect (0, 0, w, h);
+            g.setColour (Colours::white);
+            g.setFont (Font (FontOptions (13.0f, Font::bold)));
+            g.drawText (e.label, 8, 0, w - 16, h, Justification::centredLeft, true);
+            return;
+        }
+
+        g.setColour (row % 2 ? Colour (0xff252525) : Colour (0xff2b2b2b));
+        g.fillRect (0, 0, w, h);
+
+        auto* env = envOf (e);
+        const bool act = env != nullptr && env->active.load() && ! env->points.empty();
+        const bool vis = env != nullptr && env->visible;
+
+        g.setColour (Colours::white);
+        g.setFont (12.0f);
+        g.drawText (e.label, 8, 0, w - 180, h, Justification::centredLeft, true);
+
+        auto box = [&] (int x, const String& text, bool on, Colour c)
+        {
+            g.setColour (on ? c : Colour (0xff444a52));
+            g.fillRoundedRectangle ((float) x, 3.0f, 70.0f, (float) h - 6.0f, 3.0f);
+            g.setColour (on ? Colours::white : Colours::lightgrey);
+            g.setFont (11.0f);
+            g.drawText (text, x, 3, 70, h - 6, Justification::centred);
+        };
+        box (w - 156, env != nullptr && env->active.load() ? "Activa" : "Inactiva",
+             env != nullptr && env->active.load(), Colour (0xff2e9d4f));
+        box (w - 80, vis ? "Visible" : "Oculta", vis, Colour (0xffb8891a));
+        juce::ignoreUnused (act);
+    }
+
+    void listBoxItemClicked (int row, const MouseEvent& m) override
+    {
+        if (! isPositiveAndBelow (row, (int) shown.size())) return;
+        const auto e = shown[(size_t) row];
+        if (e.header) return;
+
+        const int w = list.getVisibleRowWidth();
+        const bool hitActive  = m.x >= w - 156 && m.x < w - 84;
+        const bool hitVisible = m.x >= w - 80;
+        if (! hitActive && ! hitVisible) return;
+
+        auto* env = eng.getOrCreateEnvelope (eng.envsOf (target), e.target, e.plugin,
+                                             e.target == envParam ? e.paramIndex : -1);
+        if (env == nullptr) return;
+
+        if (hitActive)  env->active = ! env->active.load();
+        if (hitVisible) env->visible = ! env->visible;
+
+        list.repaintRow (row);
+        owner.clipsChanged();       // reorganiza las filas (aparece o desaparece el carril)
+    }
+
+    Engine& eng;
+    RowOwner& owner;
+    Track* target;
+
+    std::vector<Entry> all, shown;
+    TextEditor search;
+    ListBox list;
+    Label info;
+};
+
+class EnvelopeWindow : public DocumentWindow
+{
+public:
+    EnvelopeWindow (const String& title, Component* content, std::function<void()> onCloseFn)
+        : DocumentWindow (title, Colour (0xff202020), DocumentWindow::closeButton), onClose (std::move (onCloseFn))
+    {
+        setUsingNativeTitleBar (true);
+        setContentOwned (content, true);
+        setResizable (true, true);
+        centreWithSize (getWidth(), getHeight());
+        setAlwaysOnTop (true);
+        setVisible (true);
+    }
+
+    void closeButtonPressed() override { if (onClose) onClose(); }
+
+private:
+    std::function<void()> onClose;
+};
+
+// ---------------------------------------------------------------------------
+// Zona vacía al final de las pistas: clic para elegir si se añade una pista normal o un bus
+// ---------------------------------------------------------------------------
+class AddTrackArea : public Component
+{
+public:
+    std::function<void (bool isBus)> onAdd;
+
+    AddTrackArea() { setMouseCursor (MouseCursor::PointingHandCursor); }
+
+    void paint (Graphics& g) override
+    {
+        g.fillAll (Colour (0xff181818));
+        g.setColour (Colour (0xff24282d));
+        g.fillRect (0, 0, ui::headerW, getHeight());
+
+        const float cx = 34.0f, cy = (float) getHeight() * 0.5f;
+        g.setColour (hover ? Colour (0xff3d7cb8) : Colour (0xff4a4f57));
+        g.fillEllipse (cx - 16.0f, cy - 16.0f, 32.0f, 32.0f);
+        g.setColour (Colours::white);
+        g.fillRect (cx - 8.0f, cy - 1.5f, 16.0f, 3.0f);
+        g.fillRect (cx - 1.5f, cy - 8.0f, 3.0f, 16.0f);
+
+        g.setFont (Font (FontOptions (13.0f, Font::bold)));
+        g.drawText (T ("Añadir pista o bus"), 62, (int) cy - 18, ui::headerW - 70, 18, Justification::left);
+        g.setColour (Colours::grey);
+        g.setFont (11.0f);
+        g.drawText (T ("Clic para elegir: pista normal o bus"), 62, (int) cy + 2, ui::headerW - 70, 16, Justification::left);
+
+        g.setColour (Colour (0xff2b2f35));
+        g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
+    }
+
+    void mouseEnter (const MouseEvent&) override { hover = true; repaint(); }
+    void mouseExit (const MouseEvent&) override  { hover = false; repaint(); }
+
+    void mouseDown (const MouseEvent&) override
+    {
+        PopupMenu m;
+        m.addItem (1, T ("Pista normal (audio)"));
+        m.addItem (2, T ("Bus (recibe envíos y pistas)"));
+
+        SafePointer<AddTrackArea> sp (this);
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (this), [sp] (int r)
+        {
+            if (sp.getComponent() != nullptr && r != 0 && sp->onAdd)
+                sp->onAdd (r == 2);
+        });
+    }
+
+private:
+    bool hover = false;
+};
+
+// ---------------------------------------------------------------------------
+// Fila del canal Master al final del timeline: botones FX / Auto y sus carriles de automatización
+// ---------------------------------------------------------------------------
+class MasterRow : public Component
+{
+public:
+    MasterRow (Engine& e, RowOwner& o) : eng (e), owner (o)
+    {
+        btnFx.setButtonText ("FX");
+        btnFx.onClick = [this] { owner.showMasterMenu(); };
+        btnFx.setWantsKeyboardFocus (false);
+        addAndMakeVisible (btnFx);
+
+        btnAuto.setButtonText ("Auto");
+        btnAuto.setTooltip (T ("Automatización del Master: volumen, mute y parámetros de sus efectos"));
+        btnAuto.onClick = [this] { owner.showEnvelopePanel (nullptr); };
+        btnAuto.setWantsKeyboardFocus (false);
+        addAndMakeVisible (btnAuto);
+    }
+
+    int desiredHeight() const { return ui::masterH + lanes.height(); }
+
+    void resized() override
+    {
+        btnFx.setBounds (100, 8, 50, 24);
+        btnAuto.setBounds (154, 8, 56, 24);
+    }
+
+    void updateCursor()
+    {
+        if (lanes.height() > 0)
+        {
+            const int64 p = eng.position.load();
+            if (p != lastPos)
+            {
+                lastPos = p;
+                repaint (0, ui::masterH, ui::headerW, lanes.height());
+            }
+        }
+    }
+
+    void paint (Graphics& g) override
+    {
+        g.fillAll (Colour (0xff1a1a1a));
+        g.setColour (Colour (0xff3a2c2c));
+        g.fillRect (0, 0, ui::headerW, getHeight());
+
+        g.setColour (Colours::white);
+        g.setFont (Font (FontOptions (15.0f, Font::bold)));
+        g.drawText ("MASTER", 10, 8, 86, 24, Justification::left);
+        g.setColour (Colours::grey);
+        g.setFont (11.0f);
+        g.drawText (T ("Mezcla final: plugins y automatización"), 10, 38, ui::headerW - 20, 16, Justification::left);
+
+        g.setColour (Colours::black);
+        g.drawVerticalLine (ui::headerW - 1, 0.0f, (float) getHeight());
+
+        const double pps = owner.pps();
+        lanes.paint (g, ui::masterH, getWidth(), pps, false);
+        drawTimeGrid (g, owner, pps, g.getClipBounds(), getHeight());
+        lanes.paint (g, ui::masterH, getWidth(), pps, true);
+
+        g.setColour (Colours::black);
+        g.drawHorizontalLine (0, 0.0f, (float) getWidth());
+    }
+
+    void mouseDown (const MouseEvent& e) override
+    {
+        if (e.y >= ui::masterH) lanes.mouseDown (e, ui::masterH);
+        else if (e.x >= ui::headerW) owner.setCursorFromX (e.x);
+    }
+
+    void mouseDrag (const MouseEvent& e) override { lanes.mouseDrag (e, ui::masterH); }
+    void mouseUp (const MouseEvent&) override     { lanes.mouseUp(); }
+
+private:
+    Engine& eng;
+    RowOwner& owner;
+    TextButton btnFx, btnAuto;
+    EnvLanes lanes { eng, owner, *this, nullptr };
+    int64 lastPos = -1;
+};
+
 class MainComponent : public Component, public RowOwner, private Timer
 {
 public:
@@ -668,14 +1293,8 @@ public:
         mk (bPlay, "Play", [this] { if (engine.playing) engine.pause(); else engine.play(); });
         mk (bStop, "Stop", [this] { doStop(); });
         mk (bRec,  "Rec",  [this] { doRecord(); });
-        mk (bAdd,  T ("+ Pista"), [this] { addTrackRow (engine.addTrack ("Pista " + String (rows.size() + 1))); layoutContent(); });
-        mk (bAddBus, "+ Bus", [this]
-        {
-            int n = 1;
-            for (auto& t : engine.tracks) if (t->isBus.load()) ++n;
-            addTrackRow (engine.addTrack ("Bus " + String (n), true));
-            layoutContent();
-        });
+        mk (bAdd,  T ("+ Pista"), [this] { addNewTrack (false); });
+        mk (bAddBus, "+ Bus", [this] { addNewTrack (true); });
         mk (bImport, "Importar", [this] { importAudio(); });
         mk (bZoomOut, "-", [this] { setZoom (pxPerSec / 1.25); });
         mk (bZoomIn, "+", [this] { setZoom (pxPerSec * 1.25); });
@@ -684,6 +1303,7 @@ public:
         mk (bReport, "Ver plugins", [this] { showReport(); });
         mk (bOpen, "Abrir", [this] { openProject(); });
         mk (bSave, "Guardar", [this] { saveProjectQuick(); });
+        mk (bMasterFx, T ("FX Master"), [this] { showMasterFxMenu(); });
 
         // Herramientas: Selección / Mano / Cortar
         auto mkTool = [this] (TextButton& b, const String& text, int toolId)
@@ -772,6 +1392,9 @@ public:
         viewport.setScrollBarsShown (true, true);
         viewport.setWantsKeyboardFocus (false);   // así Supr, Inicio, Ctrl+S llegan a esta ventana
         addAndMakeVisible (viewport);
+        addArea.onAdd = [this] (bool isBus) { addNewTrack (isBus); };
+        content.addAndMakeVisible (addArea);
+        content.addAndMakeVisible (masterRow);
         content.addAndMakeVisible (loopOverlay);
         content.addAndMakeVisible (playhead);
 
@@ -783,6 +1406,7 @@ public:
     ~MainComponent() override
     {
         stopTimer();
+        envWindow.reset();
         windows.clear();      // cerrar editores antes de destruir los plugins
         rows.clear();
     }
@@ -857,8 +1481,42 @@ public:
         CallOutBox::launchAsynchronously (std::make_unique<SendPanel> (engine, t), source.getScreenBounds(), nullptr);
     }
 
+    void showMasterMenu() override { showMasterFxMenu(); }
+
+    // Panel de envolventes (Reaper): todo lo automatizable de la pista (nullptr = Master)
+    void showEnvelopePanel (Track* t) override
+    {
+        envWindow.reset();
+        const String title = t != nullptr ? T ("Envolventes - ") + t->name : T ("Envolventes - Master");
+
+        SafePointer<MainComponent> sp (this);
+        envWindow = std::make_unique<EnvelopeWindow> (title, new EnvelopePanel (engine, *this, t), [sp]
+        {
+            MessageManager::callAsync ([sp]
+            {
+                if (auto* self = sp.getComponent()) self->envWindow.reset();
+            });
+        });
+    }
+
+    void addNewTrack (bool isBus)
+    {
+        if (isBus)
+        {
+            int n = 1;
+            for (auto& t : engine.tracks) if (t->isBus.load()) ++n;
+            addTrackRow (engine.addTrack ("Bus " + String (n), true));
+        }
+        else
+        {
+            addTrackRow (engine.addTrack ("Pista " + String (rows.size() + 1)));
+        }
+        layoutContent();
+    }
+
     void removeTrack (Track& t) override
     {
+        envWindow.reset();
         closeWindowsFor (t);
         for (size_t i = 0; i < rows.size(); ++i)
             if (&rows[i]->getTrack() == &t)
@@ -906,6 +1564,8 @@ public:
             m.addItem (100 + i, T ("Abrir: ") + t.plugins[(size_t) i]->getName());
         for (int i = 0; i < (int) t.plugins.size(); ++i)
             m.addItem (200 + i, T ("Quitar: ") + t.plugins[(size_t) i]->getName());
+        m.addSeparator();
+        m.addItem (300, T ("Automatización de esta pista y sus efectos..."));
 
         SafePointer<MainComponent> sp (this);
         Track* tp = &t;
@@ -923,16 +1583,23 @@ public:
                     AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Plugin", "No se pudo cargar:\n" + err);
                     return;
                 }
+                self->envWindow.reset();      // la lista de parámetros cambia
                 self->engine.addPlugin (*tp, std::move (inst));
                 self->openEditor (*tp->plugins.back());
+            }
+            else if (r == 300)
+            {
+                self->showEnvelopePanel (tp);
             }
             else if (r >= 200 && r < 300)
             {
                 const int idx = r - 200;
                 if (idx < (int) tp->plugins.size())
                 {
+                    self->envWindow.reset();
                     self->closeWindowFor (tp->plugins[(size_t) idx].get());
-                    self->engine.removePlugin (*tp, idx);
+                    self->engine.removePlugin (*tp, idx);   // también borra sus envolventes
+                    self->clipsChanged();                   // quita los carriles que ya no existen
                 }
             }
             else if (r >= 100 && r < 200)
@@ -940,6 +1607,75 @@ public:
                 const int idx = r - 100;
                 if (idx < (int) tp->plugins.size())
                     self->openEditor (*tp->plugins[(size_t) idx]);
+            }
+        });
+    }
+
+    // Menú del canal Master: añadir, abrir y quitar plugins (limitador, EQ de masterización...)
+    void showMasterFxMenu()
+    {
+        PopupMenu m, add;
+        auto types = engine.host.list.getTypes();
+
+        std::map<String, PopupMenu> byVendor;
+        for (int i = 0; i < types.size(); ++i)
+            if (! types[i].isInstrument)
+                byVendor[types[i].manufacturerName].addItem (1000 + i, types[i].name);
+
+        for (auto& kv : byVendor)
+            add.addSubMenu (kv.first.isEmpty() ? String ("Otros") : kv.first, kv.second);
+        if (byVendor.empty())
+            add.addItem (1, T ("(primero pulsa 'Escanear plugins')"), false);
+
+        m.addSubMenu (T ("Añadir plugin al Master"), add);
+        m.addSeparator();
+        for (int i = 0; i < (int) engine.masterPlugins.size(); ++i)
+            m.addItem (100 + i, T ("Abrir: ") + engine.masterPlugins[(size_t) i]->getName());
+        for (int i = 0; i < (int) engine.masterPlugins.size(); ++i)
+            m.addItem (200 + i, T ("Quitar: ") + engine.masterPlugins[(size_t) i]->getName());
+        m.addSeparator();
+        m.addItem (300, T ("Automatización del Master y sus efectos..."));
+
+        SafePointer<MainComponent> sp (this);
+        m.showMenuAsync (PopupMenu::Options(), [sp, types] (int r)
+        {
+            auto* self = sp.getComponent();
+            if (self == nullptr || r == 0) return;
+            auto& mp = self->engine.masterPlugins;
+
+            if (r >= 1000)
+            {
+                String err;
+                auto inst = self->engine.host.create (types[r - 1000], self->engine.sampleRate, self->engine.maxBlock, err);
+                if (inst == nullptr)
+                {
+                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Plugin", "No se pudo cargar:\n" + err);
+                    return;
+                }
+                self->envWindow.reset();
+                self->engine.addMasterPlugin (std::move (inst));
+                self->openEditor (*mp.back());
+            }
+            else if (r == 300)
+            {
+                self->showEnvelopePanel (nullptr);
+            }
+            else if (r >= 200 && r < 300)
+            {
+                const int idx = r - 200;
+                if (idx < (int) mp.size())
+                {
+                    self->envWindow.reset();
+                    self->closeWindowFor (mp[(size_t) idx].get());
+                    self->engine.removeMasterPlugin (idx);
+                    self->clipsChanged();
+                }
+            }
+            else if (r >= 100 && r < 200)
+            {
+                const int idx = r - 100;
+                if (idx < (int) mp.size())
+                    self->openEditor (*mp[(size_t) idx]);
             }
         });
     }
@@ -969,6 +1705,7 @@ public:
 
         masterMeterBounds = bar1.removeFromRight (40).reduced (0, 6);
         master.setBounds (bar1.removeFromRight (130));
+        bMasterFx.setBounds (bar1.removeFromRight (84));
         statusLabel.setBounds (bar1.reduced (8, 0));
 
         for (auto* b : { &bSelect, &bHand, &bCut })
@@ -1086,11 +1823,25 @@ private:
         const double secs = jmax ((double) maxEnd / engine.sampleRate + 30.0,
                                   (viewport.getWidth() - ui::headerW) / pxPerSec);
         const int w = ui::headerW + (int) (secs * pxPerSec);
-        const int h = ui::rulerH + (int) rows.size() * ui::rowH;
 
-        content.setSize (jmax (w, viewport.getMaximumVisibleWidth()), jmax (h, viewport.getMaximumVisibleHeight()));
-        for (size_t i = 0; i < rows.size(); ++i)
-            rows[i]->setBounds (0, ui::rulerH + (int) i * ui::rowH, content.getWidth(), ui::rowH);
+        // alto total: regla + pistas (cada una con sus carriles visibles) + zona "+" + fila Master
+        int h = ui::rulerH;
+        for (auto& r : rows) h += r->desiredHeight();
+        h += ui::addH + masterRow.desiredHeight();
+
+        const int cw = jmax (w, viewport.getMaximumVisibleWidth());
+        content.setSize (cw, jmax (h, viewport.getMaximumVisibleHeight()));
+
+        int y = ui::rulerH;
+        for (auto& r : rows)
+        {
+            const int rh = r->desiredHeight();
+            r->setBounds (0, y, cw, rh);
+            y += rh;
+        }
+        addArea.setBounds (0, y, cw, ui::addH);
+        y += ui::addH;
+        masterRow.setBounds (0, y, cw, masterRow.desiredHeight());
 
         loopOverlay.setBounds (content.getLocalBounds());
         loopOverlay.toFront (false);
@@ -1098,7 +1849,11 @@ private:
         content.repaint();
     }
 
-    void repaintRows() { for (auto& r : rows) r->repaint(); }
+    void repaintRows()
+    {
+        for (auto& r : rows) r->repaint();
+        masterRow.repaint();
+    }
 
     void setZoom (double v)
     {
@@ -1209,6 +1964,7 @@ private:
     {
         selTrack = nullptr;
         selClip = nullptr;
+        envWindow.reset();
         windows.clear();
         rows.clear();
         for (auto& t : engine.tracks)
@@ -1233,6 +1989,7 @@ private:
         }
 
         for (auto& r : rows) r->updateMeters();
+        masterRow.updateCursor();
 
         const int64 ls = engine.loopStart.load(), le = engine.loopEnd.load();
         const bool lo = engine.loopOn.load();
@@ -1319,6 +2076,7 @@ private:
             auto f = fc.getResult();
             if (f == File()) return;
 
+            envWindow.reset();
             windows.clear();
             rows.clear();
             String err;
@@ -1445,13 +2203,17 @@ private:
     std::vector<std::unique_ptr<PluginWindow>> windows;
     std::vector<std::unique_ptr<TrackRow>> rows;
 
+    std::unique_ptr<EnvelopeWindow> envWindow;           // panel de envolventes abierto (si hay)
+
     TimelineContent content;
+    AddTrackArea addArea;
+    MasterRow masterRow { engine, *this };
     LoopOverlay loopOverlay { engine, [this] { return pxPerSec; } };
     Playhead playhead;
     Viewport viewport;
 
     TextButton bHome, bPlay, bStop, bRec, bAdd, bAddBus, bImport, bZoomOut, bZoomIn, bAudio, bScan, bReport, bOpen, bSave;
-    TextButton bSelect, bHand, bCut, bLoop;
+    TextButton bSelect, bHand, bCut, bLoop, bMasterFx;
     Label timeLabel, bpmLabel, gridLabel, statusLabel;
     Slider master, bpmSlider;
     ComboBox gridBox;
