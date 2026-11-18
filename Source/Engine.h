@@ -16,6 +16,7 @@ struct Clip
     File file;
     AudioBuffer<float> audio;                 // siempre 2 canales
     std::atomic<int64> startSample { 0 };
+    std::atomic<int64> srcOffset { 0 };       // muestra del archivo original donde empieza este clip (recorte/división)
     std::atomic<int> fadeInSamples { 0 };     // duración del fade in (0 = sin fade)
     std::atomic<int> fadeOutSamples { 0 };    // duración del fade out (0 = sin fade)
     std::unique_ptr<AudioThumbnail> thumb;
@@ -251,6 +252,64 @@ public:
         return makeClip (f.getFileNameWithoutExtension(), f, std::move (out), 0);
     }
 
+    // Copia el tramo [f0, f1) del archivo (posiciones del archivo) a un clip nuevo que empieza en 'start'.
+    // 'origin' = posición del archivo donde empieza el buffer de 'src'.
+    std::unique_ptr<Clip> makeSub (const Clip& src, int64 origin, int64 f0, int64 f1, int64 start)
+    {
+        const int n = (int) (f1 - f0);
+        AudioBuffer<float> b (2, n);
+        for (int ch = 0; ch < 2; ++ch)
+            b.copyFrom (ch, 0, src.audio, ch, (int) (f0 - origin), n);
+        auto c = makeClip (src.name, src.file, std::move (b), start);
+        c->srcOffset = f0;
+        return c;
+    }
+
+    // Recorta los bordes de un clip: el audio nuevo va de 'newStart' a 'newEnd' (muestras de la línea de tiempo).
+    // Se puede volver a alargar: lo que sobra se recupera del archivo original. Devuelve el clip resultante.
+    Clip* trimClip (Track& t, Clip* c, int64 newStart, int64 newEnd)
+    {
+        const int64 s = c->startSample.load();
+        const int total = c->audio.getNumSamples();
+        const int64 off = c->srcOffset.load();
+
+        int64 f0 = jmax<int64> (0, off + (newStart - s));
+        int64 f1 = off + (newEnd - s);
+
+        std::unique_ptr<Clip> full;
+        const Clip* srcClip = c;
+        int64 origin = off;
+        if ((f0 < off || f1 > off + total) && c->file.existsAsFile())
+        {
+            full = loadClip (c->file);                 // para alargar hay que volver al archivo completo
+            if (full != nullptr) { srcClip = full.get(); origin = 0; }
+        }
+
+        f0 = jmax (f0, origin);
+        f1 = jmin (f1, origin + (int64) srcClip->audio.getNumSamples());
+        if (f1 - f0 < 256) return c;
+        if (f0 == off && f1 == off + total) return c;
+
+        auto nc = makeSub (*srcClip, origin, f0, f1, s + (f0 - off));
+        const int newLen = (int) (f1 - f0);
+        nc->fadeInSamples  = f0 == off ? jmin (c->fadeInSamples.load(), newLen) : 0;
+        nc->fadeOutSamples = f1 == off + total ? jmin (c->fadeOutSamples.load(), newLen) : 0;
+        Clip* result = nc.get();
+
+        std::unique_ptr<Clip> dead;
+        {
+            const SpinLock::ScopedLockType sl (lock);
+            for (size_t i = 0; i < t.clips.size(); ++i)
+                if (t.clips[i].get() == c)
+                {
+                    dead = std::move (t.clips[i]);
+                    t.clips[i] = std::move (nc);
+                    break;
+                }
+        }
+        return result;
+    }
+
     void addClip (Track& t, std::unique_ptr<Clip> c)
     {
         const SpinLock::ScopedLockType sl (lock);
@@ -287,6 +346,8 @@ public:
         }
         auto ca = makeClip (c->name, c->file, std::move (a), s);
         auto cb = makeClip (c->name, c->file, std::move (b), at);
+        ca->srcOffset = c->srcOffset.load();
+        cb->srcOffset = c->srcOffset.load() + rel;
         ca->fadeInSamples = jmin (c->fadeInSamples.load(), (int) rel);                       // cada mitad conserva su borde
         cb->fadeOutSamples = jmin (c->fadeOutSamples.load(), total - (int) rel);
 
@@ -567,6 +628,8 @@ public:
                 auto* ce = te->createNewChildElement ("CLIP");
                 ce->setAttribute ("file", c->file.getFullPathName());
                 ce->setAttribute ("start", String (c->startSample.load()));
+                ce->setAttribute ("offset", String (c->srcOffset.load()));
+                ce->setAttribute ("len", c->audio.getNumSamples());
                 ce->setAttribute ("fadein", c->fadeInSamples.load());
                 ce->setAttribute ("fadeout", c->fadeOutSamples.load());
             }
@@ -656,7 +719,16 @@ public:
             {
                 if (auto c = loadClip (File (ce->getStringAttribute ("file"))))
                 {
-                    c->startSample = ce->getStringAttribute ("start").getLargeIntValue();
+                    const int64 start = ce->getStringAttribute ("start").getLargeIntValue();
+                    const int64 off = ce->getStringAttribute ("offset").getLargeIntValue();
+                    const int64 len = ce->getIntAttribute ("len", 0);
+                    const int64 fullLen = c->audio.getNumSamples();
+
+                    // clip recortado o dividido: se queda solo con su tramo del archivo
+                    if (len > 0 && off >= 0 && off + len <= fullLen && (off > 0 || len < fullLen))
+                        c = makeSub (*c, 0, off, off + len, start);
+
+                    c->startSample = start;
                     c->fadeInSamples = jmax (0, ce->getIntAttribute ("fadein", 0));
                     c->fadeOutSamples = jmax (0, ce->getIntAttribute ("fadeout", 0));
                     addClip (*t, std::move (c));

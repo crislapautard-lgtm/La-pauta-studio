@@ -571,6 +571,17 @@ public:
             g.setColour (Colours::orange);
             if (fiW > 0) g.drawLine ((float) r.getX(), (float) r.getBottom(), (float) (r.getX() + fiW), (float) r.getY(), 1.5f);
             if (foW > 0) g.drawLine ((float) (r.getRight() - foW), (float) r.getY(), (float) r.getRight(), (float) r.getBottom(), 1.5f);
+            if (trimClip == c.get())     // recorte en curso: oscurece lo que se va a quitar y marca el borde
+            {
+                const int tsX = ui::headerW + (int) ((double) trimStart / eng.sampleRate * pps);
+                const int teX = ui::headerW + (int) ((double) trimEnd / eng.sampleRate * pps);
+                g.setColour (Colours::black.withAlpha (0.65f));
+                if (tsX > r.getX())     g.fillRect (r.getX(), r.getY(), tsX - r.getX(), r.getHeight());
+                if (teX < r.getRight()) g.fillRect (teX, r.getY(), r.getRight() - teX, r.getHeight());
+                g.setColour (Colours::yellow);
+                g.drawVerticalLine (trimIsLeft ? tsX : teX, (float) r.getY(), (float) r.getBottom());
+            }
+
             g.setColour (Colours::white);
             g.fillRect (r.getX() + fiW - 4, r.getY(), 8, 8);                    // tirador fade in
             g.fillRect (r.getRight() - foW - 4, r.getY(), 8, 8);                // tirador fade out
@@ -596,12 +607,20 @@ public:
             if (owner.getTool() == ui::toolHand)     cur = MouseCursor::DraggingHandCursor;
             else if (owner.getTool() == ui::toolCut) cur = MouseCursor::CrosshairCursor;
         }
+        if (e.x >= ui::headerW && e.y < ui::rowH && owner.getTool() != ui::toolCut)
+        {
+            bool left = false;
+            if (auto* c = clipAt (e.x))
+                if (e.y > 14 && edgeHit (*c, e.x, left))
+                    cur = MouseCursor::LeftRightResizeCursor;     // borde del clip: arrastra para recortar
+        }
         setMouseCursor (cur);
     }
 
     void mouseDown (const MouseEvent& e) override
     {
         dragClip = nullptr;
+        trimClip = nullptr;
         if (e.y >= ui::rowH) { lanes.mouseDown (e, ui::rowH); return; }   // zona de carriles
         if (e.x < ui::headerW) return;
 
@@ -648,6 +667,17 @@ public:
             return;
         }
 
+        // bordes del clip (por debajo de los tiradores de fade): arrastrar = recortar
+        bool edgeLeft = false;
+        if (c != nullptr && e.y > 14 && edgeHit (*c, e.x, edgeLeft))
+        {
+            trimClip = c;
+            trimIsLeft = edgeLeft;
+            trimStart = c->startSample.load();
+            trimEnd = trimStart + c->audio.getNumSamples();
+            return;
+        }
+
         if (c != nullptr && tool == ui::toolHand)
         {
             dragClip = c;
@@ -675,6 +705,17 @@ public:
             return;
         }
 
+        if (trimClip != nullptr)
+        {
+            if (! ownsClip (trimClip)) { trimClip = nullptr; return; }
+            const int64 s = trimClip->startSample.load();
+            const int64 here = owner.snapSample (sampleAt (e.x));
+            if (trimIsLeft) trimStart = jmin (here, s + trimClip->audio.getNumSamples() - 256);
+            else            trimEnd = jmax (here, s + 256);
+            repaint();
+            return;
+        }
+
         if (dragClip == nullptr) return;
         const auto delta = (int64) (e.getDistanceFromDragStartX() / owner.pps() * eng.sampleRate);
         dragClip->startSample = jmax<int64> (0, owner.snapSample (dragOrigStart + delta));
@@ -685,6 +726,19 @@ public:
     {
         lanes.mouseUp();
         fadeClip = nullptr;
+
+        if (trimClip != nullptr)
+        {
+            auto* tc = trimClip;
+            trimClip = nullptr;
+            if (ownsClip (tc))
+            {
+                auto* nc = eng.trimClip (track, tc, trimStart, trimEnd);
+                owner.setSelected (&track, nc);
+            }
+            owner.clipsChanged();
+            return;
+        }
         if (dragClip != nullptr) { dragClip = nullptr; owner.clipsChanged(); }
     }
 
@@ -700,6 +754,18 @@ private:
     int64 sampleAt (int x) const
     {
         return jmax<int64> (0, (int64) ((x - ui::headerW) / owner.pps() * eng.sampleRate));
+    }
+
+    // ¿el clic cae en el borde izquierdo o derecho del clip? (zona de 5 px, solo si el clip no es diminuto)
+    bool edgeHit (const Clip& c, int x, bool& left) const
+    {
+        const double pps = owner.pps();
+        const int x0 = ui::headerW + (int) ((double) c.startSample.load() / eng.sampleRate * pps);
+        const int x1 = x0 + (int) ((double) c.audio.getNumSamples() / eng.sampleRate * pps);
+        if (x1 - x0 < 14) return false;
+        if (x >= x0 && x - x0 <= 5) { left = true;  return true; }
+        if (x <= x1 && x1 - x <= 5) { left = false; return true; }
+        return false;
     }
 
     bool ownsClip (Clip* c) const
@@ -802,6 +868,9 @@ private:
     static constexpr double fadeSecs[6] = { 0.0, 0.25, 0.5, 1.0, 2.0, 4.0 };
 
     Clip* dragClip = nullptr;
+    Clip* trimClip = nullptr;       // clip cuyo borde se está recortando
+    bool trimIsLeft = true;
+    int64 trimStart = 0, trimEnd = 0;
     Clip* fadeClip = nullptr;       // clip cuyo fade se está arrastrando
     bool fadeIsOut = true;
     int64 dragOrigStart = 0;
