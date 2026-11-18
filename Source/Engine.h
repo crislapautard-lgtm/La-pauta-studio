@@ -339,6 +339,11 @@ public:
     {
         XmlElement root ("LAPAUTA_PROJECT");
         root.setAttribute ("master", (double) masterGain.load());
+        root.setAttribute ("bpm", bpm.load());
+        root.setAttribute ("grid", gridId);
+        root.setAttribute ("loopOn", loopOn.load());
+        root.setAttribute ("loopStart", String (loopStart.load()));
+        root.setAttribute ("loopEnd", String (loopEnd.load()));
 
         for (auto& t : tracks)
         {
@@ -397,6 +402,11 @@ public:
         }   // pistas viejas destruidas aquí
 
         masterGain = (float) xml->getDoubleAttribute ("master", 1.0);
+        bpm = jlimit (20.0, 400.0, xml->getDoubleAttribute ("bpm", 120.0));
+        gridId = xml->getIntAttribute ("grid", 4);
+        loopStart = xml->getStringAttribute ("loopStart").getLargeIntValue();
+        loopEnd = xml->getStringAttribute ("loopEnd").getLargeIntValue();
+        loopOn = xml->getBoolAttribute ("loopOn", false);
         position = 0;
         int missing = 0;
 
@@ -504,6 +514,11 @@ public:
         const int64 pos = position.load();
         const bool isRec = recording.load();
 
+        // Bucle: si el bloque cruza el final del bucle, la parte que sobra se toma del inicio del bucle.
+        const int64 lS = loopStart.load(), lE = loopEnd.load();
+        const bool useLoop = loopOn.load() && ! isRec && (lE - lS) >= n && pos < lE && pos + n >= lE;
+        const int len1 = useLoop ? (int) (lE - pos) : n;
+
         bool anySolo = false;
         for (auto& t : tracks) if (t->solo) anySolo = true;
 
@@ -522,7 +537,11 @@ public:
 
             if (isPlaying && ! bus)
                 for (auto& c : t->clips)
-                    mixClip (*c, b, pos, n);
+                {
+                    mixClip (*c, b, pos, 0, len1);
+                    if (useLoop && len1 < n)
+                        mixClip (*c, b, lS, len1, n - len1);
+                }
 
             if (isRec && t->writer != nullptr && in != nullptr && numIn > 0)
             {
@@ -602,7 +621,11 @@ public:
         masterPeakR = jmax (mix.getMagnitude (1, 0, n), masterPeakR.load() * 0.85f);
 
         if (isPlaying)
-            position += n;
+        {
+            // Si la interfaz movió el cursor durante este bloque, se respeta el cursor nuevo.
+            int64 expected = pos;
+            position.compare_exchange_strong (expected, useLoop ? lS + (n - len1) : pos + n);
+        }
     }
 
     // ------------------------------ Datos ----------------------------------
@@ -617,19 +640,27 @@ public:
     std::atomic<int64> position { 0 };
     std::atomic<float> masterGain { 1.0f }, masterPeakL { 0.0f }, masterPeakR { 0.0f };
 
+    // Tempo, bucle y rejilla (la rejilla es solo de la interfaz, se guarda con el proyecto)
+    std::atomic<double> bpm { 120.0 };
+    std::atomic<bool> loopOn { false };
+    std::atomic<int64> loopStart { 0 }, loopEnd { 0 };
+    int gridId = 4;                                   // 4 = 1/4 (ver la lista de rejillas en UI.h)
+
     double sampleRate = 44100.0;
     int blockSize = 512;
     int maxBlock = 2048;
 
 private:
-    static void mixClip (Clip& c, AudioBuffer<float>& b, int64 pos, int n)
+    // Mezcla la parte del clip que cae entre 'pos' y 'pos + n' (posición en la línea de tiempo)
+    // dentro del buffer 'b', empezando en la muestra 'dstOff' del buffer.
+    static void mixClip (Clip& c, AudioBuffer<float>& b, int64 pos, int dstOff, int n)
     {
         const int64 cs = c.startSample.load();
         const int64 ce = cs + c.audio.getNumSamples();
-        if (pos + n <= cs || pos >= ce) return;
+        if (n <= 0 || pos + n <= cs || pos >= ce) return;
 
         const int64 from = jmax (pos, cs), to = jmin (pos + n, ce);
-        const int dst = (int) (from - pos), src = (int) (from - cs), len = (int) (to - from);
+        const int dst = dstOff + (int) (from - pos), src = (int) (from - cs), len = (int) (to - from);
         for (int ch = 0; ch < 2; ++ch)
             b.addFrom (ch, dst, c.audio, ch, src, len);
     }

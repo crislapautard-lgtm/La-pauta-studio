@@ -21,6 +21,7 @@ public:
             setUsingNativeTitleBar (true);
             setContentOwned (new MainComponent(), true);
             setResizable (true, true);
+            setResizeLimits (1000, 500, 8000, 8000);   // por debajo de 1000 px la barra de herramientas no cabe
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
 

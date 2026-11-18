@@ -10,6 +10,31 @@ namespace ui
     constexpr int headerW = 300;
     constexpr int rowH = 96;
     constexpr int rulerH = 28;
+    constexpr int toolbarH = 40;
+
+    enum Tool { toolSelect = 0, toolHand = 1, toolCut = 2 };
+
+    // Rejillas: el id de cada opción es su posición + 1. 'beats' = duración de cada paso en negras (0 = libre).
+    struct GridItem { const char* name; double beats; };
+
+    inline const GridItem* gridItems()
+    {
+        static const GridItem items[] =
+        {
+            { "Libre (sin imán)", 0.0 },        // id 1
+            { "1/1 (compás)",     4.0 },        // id 2
+            { "1/2",              2.0 },        // id 3
+            { "1/4",              1.0 },        // id 4
+            { "1/8",              0.5 },        // id 5
+            { "1/16",             0.25 },       // id 6
+            { "1/32",             0.125 },      // id 7
+            { "1/8 tresillo",     1.0 / 3.0 },  // id 8
+            { "1/16 tresillo",    1.0 / 6.0 }   // id 9
+        };
+        return items;
+    }
+
+    constexpr int numGridItems = 9;
 }
 
 inline String T (const char* utf8) { return String::fromUTF8 (utf8); }
@@ -24,6 +49,16 @@ struct RowOwner
     virtual void setCursorFromX (int x) = 0;
     virtual void clipsChanged() = 0;
     virtual void showSendPanel (Track&, Component& source) = 0;
+
+    virtual int getTool() const = 0;
+    virtual void setTool (int) = 0;
+    virtual int64 snapSample (int64) const = 0;
+    virtual double gridStepSeconds() const = 0;      // 0 = libre (sin imán)
+    virtual double beatSeconds() const = 0;
+    virtual Clip* selectedClip() const = 0;
+    virtual void setSelected (Track*, Clip*) = 0;
+    virtual void setLoopFromClip (Clip&) = 0;
+    virtual void toggleLoop() = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -94,6 +129,7 @@ public:
         inputBox.setSelectedId (track.inputChannel.load() + 1, dontSendNotification);
         inputBox.setTooltip (T ("Entrada de la tarjeta que graba esta pista"));
         inputBox.onChange = [this] { track.inputChannel = inputBox.getSelectedId() - 1; };
+        inputBox.setScrollWheelEnabled (false);   // la rueda es para el zoom y el desplazamiento
         addAndMakeVisible (inputBox);
 
         btnSend.setButtonText (T ("Env"));
@@ -117,6 +153,7 @@ public:
         vol.setValue (Decibels::gainToDecibels ((float) track.gain, -60.0f), dontSendNotification);
         vol.setPopupDisplayEnabled (true, true, nullptr);
         vol.onValueChange = [this] { track.gain = Decibels::decibelsToGain ((float) vol.getValue(), -60.0f); };
+        vol.setScrollWheelEnabled (false);
         addAndMakeVisible (vol);
 
         pan.setSliderStyle (Slider::LinearHorizontal);
@@ -126,6 +163,7 @@ public:
         pan.setValue (track.pan, dontSendNotification);
         pan.setPopupDisplayEnabled (true, true, nullptr);
         pan.onValueChange = [this] { track.pan = (float) pan.getValue(); };
+        pan.setScrollWheelEnabled (false);
         addAndMakeVisible (pan);
     }
 
@@ -180,13 +218,15 @@ public:
         const double pps = owner.pps();
         const auto visible = g.getClipBounds();
 
+        drawGrid (g, pps, visible);
+
         for (auto& c : track.clips)
         {
             const double startSec = (double) c->startSample.load() / eng.sampleRate;
             const double lenSec = (double) c->audio.getNumSamples() / eng.sampleRate;
             Rectangle<int> r (ui::headerW + (int) (startSec * pps), 4, jmax (2, (int) (lenSec * pps)), getHeight() - 8);
 
-            g.setColour (c.get() == selected ? Colour (0xff3d7cb8) : Colour (0xff2b5a85));
+            g.setColour (c.get() == owner.selectedClip() ? Colour (0xff3d7cb8) : Colour (0xff2b5a85));
             g.fillRect (r);
 
             auto vis = r.getIntersection (visible);
@@ -206,6 +246,17 @@ public:
         }
     }
 
+    void mouseMove (const MouseEvent& e) override
+    {
+        MouseCursor::StandardCursorType cur = MouseCursor::NormalCursor;
+        if (e.x >= ui::headerW)
+        {
+            if (owner.getTool() == ui::toolHand)     cur = MouseCursor::DraggingHandCursor;
+            else if (owner.getTool() == ui::toolCut) cur = MouseCursor::CrosshairCursor;
+        }
+        setMouseCursor (cur);
+    }
+
     void mouseDown (const MouseEvent& e) override
     {
         dragClip = nullptr;
@@ -215,46 +266,39 @@ public:
 
         if (e.mods.isPopupMenu())
         {
-            if (c == nullptr) return;
-            selected = c;
-            repaint();
-            PopupMenu m;
-            m.addItem (1, T ("Dividir en el cursor"));
-            m.addItem (2, T ("Eliminar clip"));
-            SafePointer<TrackRow> sp (this);
-            m.showMenuAsync (PopupMenu::Options(), [sp, c] (int r)
-            {
-                auto* self = sp.getComponent();
-                if (self == nullptr || r == 0) return;
-                if (r == 1)
-                    self->eng.splitClip (self->track, c, self->eng.position.load());
-                else if (r == 2)
-                    self->eng.removeClip (self->track, c);
-                self->selected = nullptr;
-                self->owner.clipsChanged();
-            });
+            if (c != nullptr) owner.setSelected (&track, c);
+            showContextMenu (c);
             return;
         }
 
-        if (c != nullptr)
+        const int tool = owner.getTool();
+        owner.setSelected (c != nullptr ? &track : nullptr, c);
+
+        if (c != nullptr && tool == ui::toolCut)
         {
-            selected = c;
+            // Herramienta Cortar: divide el clip donde haces clic (con imán a la rejilla)
+            eng.splitClip (track, c, owner.snapSample (sampleAt (e.x)));
+            owner.setSelected (nullptr, nullptr);
+            owner.clipsChanged();
+            return;
+        }
+
+        if (c != nullptr && tool == ui::toolHand)
+        {
             dragClip = c;
             dragOrigStart = c->startSample.load();
         }
         else
         {
-            selected = nullptr;
             owner.setCursorFromX (e.x);
         }
-        repaint();
     }
 
     void mouseDrag (const MouseEvent& e) override
     {
         if (dragClip == nullptr) return;
         const auto delta = (int64) (e.getDistanceFromDragStartX() / owner.pps() * eng.sampleRate);
-        dragClip->startSample = jmax<int64> (0, dragOrigStart + delta);
+        dragClip->startSample = jmax<int64> (0, owner.snapSample (dragOrigStart + delta));
         repaint();
     }
 
@@ -270,6 +314,86 @@ private:
         b.setClickingTogglesState (true);
         b.setColour (TextButton::buttonOnColourId, onColour);
         addAndMakeVisible (b);
+    }
+
+    int64 sampleAt (int x) const
+    {
+        return jmax<int64> (0, (int64) ((x - ui::headerW) / owner.pps() * eng.sampleRate));
+    }
+
+    bool ownsClip (Clip* c) const
+    {
+        for (auto& x : track.clips)
+            if (x.get() == c) return true;
+        return false;
+    }
+
+    // Líneas verticales de la rejilla (compases más marcados que tiempos y subdivisiones)
+    void drawGrid (Graphics& g, double pps, Rectangle<int> visible)
+    {
+        const double beat = owner.beatSeconds();
+        double step = owner.gridStepSeconds();
+        if (step <= 0.0) step = beat;          // en modo libre solo se dibujan los tiempos
+        if (step <= 0.0 || beat <= 0.0) return;
+        while (step * pps < 8.0) step *= 2.0;  // muy alejado: menos líneas
+
+        const int x0 = jmax (ui::headerW, visible.getX());
+        const int first = jmax (0, (int) std::floor ((x0 - ui::headerW) / (step * pps)) - 1);
+
+        for (int i = first;; ++i)
+        {
+            const double t = i * step;
+            const int x = ui::headerW + (int) (t * pps);
+            if (x > visible.getRight()) break;
+            if (x < x0) continue;
+
+            const double inBeats = t / beat;
+            const bool isBar  = std::abs (inBeats / 4.0 - std::round (inBeats / 4.0)) < 1.0e-6;
+            const bool isBeat = std::abs (inBeats - std::round (inBeats)) < 1.0e-6;
+
+            g.setColour (Colours::white.withAlpha (isBar ? 0.16f : (isBeat ? 0.09f : 0.04f)));
+            g.drawVerticalLine (x, 0.0f, (float) getHeight());
+        }
+    }
+
+    // Menú del clic derecho: herramientas + acciones sobre el clip
+    void showContextMenu (Clip* c)
+    {
+        const int tool = owner.getTool();
+
+        PopupMenu m;
+        m.addItem (10, T ("Herramienta Selección (V)"), true, tool == ui::toolSelect);
+        m.addItem (11, T ("Herramienta Mano: mover audio (H)"), true, tool == ui::toolHand);
+        m.addItem (12, T ("Herramienta Cortar: dividir al hacer clic (C)"), true, tool == ui::toolCut);
+        m.addSeparator();
+
+        if (c != nullptr)
+        {
+            m.addItem (1, T ("Dividir en el cursor"));
+            m.addItem (2, T ("Eliminar clip (Supr)"));
+            m.addItem (3, T ("Bucle sobre este clip"));
+            m.addSeparator();
+        }
+        m.addItem (20, T ("Activar / desactivar bucle"));
+
+        SafePointer<TrackRow> sp (this);
+        m.showMenuAsync (PopupMenu::Options(), [sp, c] (int r)
+        {
+            auto* self = sp.getComponent();
+            if (self == nullptr || r == 0) return;
+
+            if (r >= 10 && r <= 12) { self->owner.setTool (r - 10); return; }
+            if (r == 20)            { self->owner.toggleLoop(); return; }
+
+            if (! self->ownsClip (c)) return;   // el clip pudo borrarse con el menú abierto
+
+            if (r == 3) { self->owner.setLoopFromClip (*c); return; }
+            if (r == 1) self->eng.splitClip (self->track, c, self->eng.position.load());
+            if (r == 2) self->eng.removeClip (self->track, c);
+
+            self->owner.setSelected (nullptr, nullptr);
+            self->owner.clipsChanged();
+        });
     }
 
     Clip* clipAt (int x) const
@@ -294,7 +418,6 @@ private:
     Slider vol, pan;
     ComboBox inputBox;
 
-    Clip* selected = nullptr;
     Clip* dragClip = nullptr;
     int64 dragOrigStart = 0;
     float lastL = 0.0f, lastR = 0.0f;
@@ -307,46 +430,89 @@ class TimelineContent : public Component
 {
 public:
     std::function<double()> getPps;
+    std::function<double()> getBeatSec;
     std::function<void (int)> onRulerClick;
+    std::function<void (int, int)> onRulerDrag;           // arrastrar en la regla = elegir región de bucle
+    std::function<void (float, int)> onZoomWheel;         // Ctrl + rueda
 
     void paint (Graphics& g) override
     {
         g.fillAll (Colour (0xff161616));
         const auto clip = g.getClipBounds();
-        if (clip.getY() >= ui::rulerH || ! getPps) return;
+        if (clip.getY() >= ui::rulerH || ! getPps || ! getBeatSec) return;
 
         g.setColour (Colour (0xff262626));
         g.fillRect (0, 0, getWidth(), ui::rulerH);
 
+        // La regla marca compases (números) y tiempos (rayitas) según el tempo del proyecto.
         const double pps = getPps();
-        double step = 1.0;
-        for (double s : { 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0 })
-        {
-            step = s;
-            if (s * pps >= 70.0) break;
-        }
+        const double beatPx = getBeatSec() * pps;
+        const double barPx = beatPx * 4.0;
+
+        int barStep = 1;
+        while (barPx * barStep < 44.0) barStep *= 2;      // muy alejado: números cada 2, 4, 8... compases
 
         g.setFont (11.0f);
-        const int first = (int) (jmax (0, clip.getX() - ui::headerW) / pps / step);
-        for (int i = first;; ++i)
+
+        if (beatPx >= 10.0)
         {
-            const double t = i * step;
-            const int x = ui::headerW + (int) (t * pps);
+            const int firstBeat = jmax (0, (int) ((clip.getX() - ui::headerW) / beatPx) - 1);
+            for (int b = firstBeat;; ++b)
+            {
+                const int x = ui::headerW + (int) (b * beatPx);
+                if (x > clip.getRight()) break;
+                if (b % 4 == 0) continue;
+
+                g.setColour (Colour (0xff6a6a6a));
+                g.drawVerticalLine (x, (float) ui::rulerH - 6.0f, (float) ui::rulerH);
+            }
+        }
+
+        const int firstBar = jmax (0, (int) ((clip.getX() - ui::headerW) / barPx) - 1);
+        for (int bar = firstBar;; ++bar)
+        {
+            const int x = ui::headerW + (int) (bar * barPx);
             if (x > clip.getRight()) break;
 
             g.setColour (Colours::grey);
-            g.drawVerticalLine (x, (float) ui::rulerH - 10.0f, (float) ui::rulerH);
-            g.setColour (Colours::lightgrey);
-            g.drawText (String::formatted ("%d:%04.1f", (int) t / 60, std::fmod (t, 60.0)),
-                        x + 3, 2, 60, 14, Justification::left);
+            g.drawVerticalLine (x, (float) ui::rulerH - 14.0f, (float) ui::rulerH);
+
+            if (bar % barStep == 0)
+            {
+                g.setColour (Colours::lightgrey);
+                g.drawText (String (bar + 1), x + 3, 2, 50, 14, Justification::left);
+            }
         }
     }
 
     void mouseDown (const MouseEvent& e) override
     {
+        rulerDownX = -1;
         if (e.y < ui::rulerH && e.x >= ui::headerW && onRulerClick)
+        {
+            rulerDownX = e.x;
             onRulerClick (e.x);
+        }
     }
+
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (rulerDownX >= 0 && std::abs (e.x - rulerDownX) > 4 && onRulerDrag)
+            onRulerDrag (rulerDownX, e.x);
+    }
+
+    void mouseUp (const MouseEvent&) override { rulerDownX = -1; }
+
+    void mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& w) override
+    {
+        if (e.mods.isCtrlDown() && onZoomWheel)
+            onZoomWheel (w.deltaY, e.x);
+        else
+            Component::mouseWheelMove (e, w);     // sin Ctrl: desplaza la vista como siempre
+    }
+
+private:
+    int rulerDownX = -1;
 };
 
 class Playhead : public Component
@@ -358,6 +524,38 @@ public:
         g.setColour (Colours::orangered);
         g.fillRect (1, 0, 1, getHeight());
     }
+};
+
+// Región de bucle: banda dorada sobre todas las pistas (gris si el bucle está apagado)
+class LoopOverlay : public Component
+{
+public:
+    LoopOverlay (Engine& e, std::function<double()> p) : eng (e), pps (std::move (p))
+    {
+        setInterceptsMouseClicks (false, false);
+    }
+
+    void paint (Graphics& g) override
+    {
+        const int64 s = eng.loopStart.load(), en = eng.loopEnd.load();
+        if (en <= s) return;
+
+        const double p = pps();
+        const int x0 = ui::headerW + (int) ((double) s / eng.sampleRate * p);
+        const int x1 = ui::headerW + (int) ((double) en / eng.sampleRate * p);
+        const Colour col = eng.loopOn.load() ? Colours::gold : Colours::grey;
+
+        g.setColour (col.withAlpha (0.12f));
+        g.fillRect (x0, 0, x1 - x0, getHeight());
+        g.setColour (col.withAlpha (0.85f));
+        g.fillRect (x0, ui::rulerH - 6, x1 - x0, 6);
+        g.drawVerticalLine (x0, 0.0f, (float) getHeight());
+        g.drawVerticalLine (x1, 0.0f, (float) getHeight());
+    }
+
+private:
+    Engine& eng;
+    std::function<double()> pps;
 };
 
 // ---------------------------------------------------------------------------
@@ -485,7 +683,66 @@ public:
         mk (bScan, "Escanear plugins", [this] { scanPlugins(); });
         mk (bReport, "Ver plugins", [this] { showReport(); });
         mk (bOpen, "Abrir", [this] { openProject(); });
-        mk (bSave, "Guardar", [this] { saveProject(); });
+        mk (bSave, "Guardar", [this] { saveProjectQuick(); });
+
+        // Herramientas: Selección / Mano / Cortar
+        auto mkTool = [this] (TextButton& b, const String& text, int toolId)
+        {
+            b.setButtonText (text);
+            b.setClickingTogglesState (true);
+            b.setRadioGroupId (1001);
+            b.setColour (TextButton::buttonOnColourId, Colour (0xff3d7cb8));
+            b.setWantsKeyboardFocus (false);
+            b.onClick = [this, toolId] { setTool (toolId); };
+            addAndMakeVisible (b);
+        };
+        mkTool (bSelect, T ("Selección"), ui::toolSelect);
+        mkTool (bHand, "Mano", ui::toolHand);
+        mkTool (bCut, "Cortar", ui::toolCut);
+        bSelect.setToggleState (true, dontSendNotification);
+
+        // Tempo y rejilla
+        bpmLabel.setText ("BPM", dontSendNotification);
+        bpmLabel.setColour (Label::textColourId, Colours::white);
+        addAndMakeVisible (bpmLabel);
+
+        bpmSlider.setSliderStyle (Slider::IncDecButtons);
+        bpmSlider.setIncDecButtonsMode (Slider::incDecButtonsDraggable_AutoDirection);
+        bpmSlider.setTextBoxStyle (Slider::TextBoxLeft, false, 60, 24);
+        bpmSlider.setRange (20.0, 400.0, 0.1);
+        bpmSlider.setValue (engine.bpm.load(), dontSendNotification);
+        bpmSlider.setScrollWheelEnabled (false);
+        bpmSlider.onValueChange = [this]
+        {
+            engine.bpm = bpmSlider.getValue();
+            content.repaint();
+            repaintRows();
+        };
+        addAndMakeVisible (bpmSlider);
+
+        gridLabel.setText (T ("Rejilla"), dontSendNotification);
+        gridLabel.setColour (Label::textColourId, Colours::white);
+        addAndMakeVisible (gridLabel);
+
+        for (int i = 0; i < ui::numGridItems; ++i)
+            gridBox.addItem (T (ui::gridItems()[i].name), i + 1);
+        gridBox.setSelectedId (engine.gridId, dontSendNotification);
+        gridBox.setWantsKeyboardFocus (false);
+        gridBox.setScrollWheelEnabled (false);
+        gridBox.onChange = [this] { engine.gridId = gridBox.getSelectedId(); repaintRows(); };
+        addAndMakeVisible (gridBox);
+
+        // Bucle
+        bLoop.setButtonText ("Bucle");
+        bLoop.setClickingTogglesState (true);
+        bLoop.setColour (TextButton::buttonOnColourId, Colour (0xffb8891a));
+        bLoop.setWantsKeyboardFocus (false);
+        bLoop.onClick = [this] { toggleLoop(); };
+        addAndMakeVisible (bLoop);
+
+        statusLabel.setColour (Label::textColourId, Colours::lightgreen);
+        statusLabel.setJustificationType (Justification::centredLeft);
+        addAndMakeVisible (statusLabel);
 
         timeLabel.setFont (Font (FontOptions (22.0f, Font::bold)));
         timeLabel.setColour (Label::textColourId, Colours::orange);
@@ -504,10 +761,18 @@ public:
         addAndMakeVisible (master);
 
         content.getPps = [this] { return pxPerSec; };
+        content.getBeatSec = [this] { return beatSeconds(); };
         content.onRulerClick = [this] (int x) { setCursorFromX (x); };
+        content.onRulerDrag = [this] (int a, int b) { setLoopFromRuler (a, b); };
+        content.onZoomWheel = [this] (float dy, int x)
+        {
+            zoomAt (std::pow (1.2, (double) jlimit (-1.0f, 1.0f, dy * 4.0f)), x);
+        };
         viewport.setViewedComponent (&content, false);
         viewport.setScrollBarsShown (true, true);
+        viewport.setWantsKeyboardFocus (false);   // así Supr, Inicio, Ctrl+S llegan a esta ventana
         addAndMakeVisible (viewport);
+        content.addAndMakeVisible (loopOverlay);
         content.addAndMakeVisible (playhead);
 
         setWantsKeyboardFocus (true);
@@ -526,9 +791,66 @@ public:
     double pps() const override { return pxPerSec; }
     void setCursorFromX (int x) override
     {
-        engine.position = jmax<int64> (0, (int64) ((x - ui::headerW) / pxPerSec * engine.sampleRate));
+        const auto s = (int64) (jmax (0.0, (x - ui::headerW) / pxPerSec) * engine.sampleRate);
+        engine.position = snapSample (s);
     }
-    void clipsChanged() override { layoutContent(); repaintRows(); }
+    void clipsChanged() override { validateSelection(); layoutContent(); repaintRows(); }
+
+    // --- herramientas, rejilla y selección ---
+    int getTool() const override { return tool; }
+
+    void setTool (int t) override
+    {
+        tool = t;
+        bSelect.setToggleState (t == ui::toolSelect, dontSendNotification);
+        bHand.setToggleState (t == ui::toolHand, dontSendNotification);
+        bCut.setToggleState (t == ui::toolCut, dontSendNotification);
+    }
+
+    double beatSeconds() const override { return 60.0 / jmax (20.0, engine.bpm.load()); }
+
+    double gridStepSeconds() const override
+    {
+        const int idx = jlimit (0, ui::numGridItems - 1, engine.gridId - 1);
+        return ui::gridItems()[idx].beats * beatSeconds();
+    }
+
+    int64 snapSample (int64 s) const override
+    {
+        const double step = gridStepSeconds() * engine.sampleRate;
+        if (step < 1.0) return s;                         // modo libre
+        return jmax<int64> (0, (int64) (std::round ((double) s / step) * step));
+    }
+
+    Clip* selectedClip() const override { return selClip; }
+
+    void setSelected (Track* t, Clip* c) override
+    {
+        selTrack = t;
+        selClip = c;
+        repaintRows();
+    }
+
+    void setLoopFromClip (Clip& c) override
+    {
+        engine.loopStart = c.startSample.load();
+        engine.loopEnd = c.startSample.load() + c.audio.getNumSamples();
+        engine.loopOn = true;
+        syncLoopButton();
+    }
+
+    void toggleLoop() override
+    {
+        if (! engine.loopOn.load() && engine.loopEnd.load() <= engine.loopStart.load())
+        {
+            // todavía no hay región: se crea de 4 compases desde el cursor
+            const int64 s = engine.position.load();
+            engine.loopStart = s;
+            engine.loopEnd = s + (int64) (beatSeconds() * 16.0 * engine.sampleRate);
+        }
+        engine.loopOn = ! engine.loopOn.load();
+        syncLoopButton();
+    }
 
     void showSendPanel (Track& t, Component& source) override
     {
@@ -626,27 +948,49 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
-        auto bar = r.removeFromTop (44).reduced (6, 6);
+        auto bar1 = r.removeFromTop (ui::toolbarH).reduced (6, 5);   // fila 1: transporte y proyecto
+        auto bar2 = r.removeFromTop (ui::toolbarH).reduced (6, 5);   // fila 2: herramientas, tempo, rejilla
         masterMeterBounds = {};
 
         for (auto* b : { &bHome, &bPlay, &bStop, &bRec })
         {
-            b->setBounds (bar.removeFromLeft (56));
-            bar.removeFromLeft (3);
+            b->setBounds (bar1.removeFromLeft (56));
+            bar1.removeFromLeft (3);
         }
-        bar.removeFromLeft (8);
-        timeLabel.setBounds (bar.removeFromLeft (130));
-        bar.removeFromLeft (8);
+        bar1.removeFromLeft (8);
+        timeLabel.setBounds (bar1.removeFromLeft (130));
+        bar1.removeFromLeft (8);
 
-        for (auto* b : { &bAdd, &bAddBus, &bImport, &bZoomOut, &bZoomIn, &bAudio, &bScan, &bReport, &bOpen, &bSave })
+        for (auto* b : { &bOpen, &bSave, &bAudio, &bScan, &bReport })
         {
-            const int w = (b == &bZoomOut || b == &bZoomIn) ? 34 : (b == &bScan ? 112 : 70);
-            b->setBounds (bar.removeFromLeft (w));
-            bar.removeFromLeft (3);
+            b->setBounds (bar1.removeFromLeft (b == &bScan ? 112 : 70));
+            bar1.removeFromLeft (3);
         }
 
-        masterMeterBounds = bar.removeFromRight (40).reduced (0, 8);
-        master.setBounds (bar.removeFromRight (130));
+        masterMeterBounds = bar1.removeFromRight (40).reduced (0, 6);
+        master.setBounds (bar1.removeFromRight (130));
+        statusLabel.setBounds (bar1.reduced (8, 0));
+
+        for (auto* b : { &bSelect, &bHand, &bCut })
+        {
+            b->setBounds (bar2.removeFromLeft (74));
+            bar2.removeFromLeft (3);
+        }
+        bar2.removeFromLeft (10);
+        bpmLabel.setBounds (bar2.removeFromLeft (36));
+        bpmSlider.setBounds (bar2.removeFromLeft (130));
+        bar2.removeFromLeft (10);
+        gridLabel.setBounds (bar2.removeFromLeft (52));
+        gridBox.setBounds (bar2.removeFromLeft (130));
+        bar2.removeFromLeft (6);
+        bLoop.setBounds (bar2.removeFromLeft (60));
+        bar2.removeFromLeft (10);
+
+        for (auto* b : { &bAdd, &bAddBus, &bImport, &bZoomOut, &bZoomIn })
+        {
+            b->setBounds (bar2.removeFromLeft ((b == &bZoomOut || b == &bZoomIn) ? 34 : 76));
+            bar2.removeFromLeft (3);
+        }
 
         viewport.setBounds (r);
         layoutContent();
@@ -677,12 +1021,41 @@ public:
 
     bool keyPressed (const KeyPress& k) override
     {
+        // Si se está escribiendo en una caja de texto (nombre de pista, BPM), no se roban las teclas.
+        if (dynamic_cast<TextEditor*> (Component::getCurrentlyFocusedComponent()) != nullptr)
+            return false;
+
+        const auto mods = k.getModifiers();
+
+        // Ctrl+S = guardar; Ctrl+Mayús+S = guardar como
+        if ((mods.isCtrlDown() || mods.isCommandDown()) && (k.getKeyCode() == 'S' || k.getKeyCode() == 's'))
+        {
+            if (mods.isShiftDown()) saveProject(); else saveProjectQuick();
+            return true;
+        }
+
         if (k == KeyPress::spaceKey)
         {
             if (engine.playing) doStop(); else engine.play();
             return true;
         }
         if (k == KeyPress::homeKey) { engine.position = 0; return true; }
+
+        // Supr (o Retroceso) = borrar el audio seleccionado
+        if (k == KeyPress::deleteKey || k == KeyPress::backspaceKey)
+        {
+            deleteSelectedClip();
+            return true;
+        }
+
+        // V / H / C = cambiar de herramienta
+        if (! mods.isAnyModifierKeyDown())
+        {
+            const auto ch = CharacterFunctions::toLowerCase (k.getTextCharacter());
+            if (ch == 'v') { setTool (ui::toolSelect); return true; }
+            if (ch == 'h') { setTool (ui::toolHand);   return true; }
+            if (ch == 'c') { setTool (ui::toolCut);    return true; }
+        }
         return false;
     }
 
@@ -719,6 +1092,8 @@ private:
         for (size_t i = 0; i < rows.size(); ++i)
             rows[i]->setBounds (0, ui::rulerH + (int) i * ui::rowH, content.getWidth(), ui::rowH);
 
+        loopOverlay.setBounds (content.getLocalBounds());
+        loopOverlay.toFront (false);
         playhead.toFront (false);
         content.repaint();
     }
@@ -727,13 +1102,113 @@ private:
 
     void setZoom (double v)
     {
-        pxPerSec = jlimit (10.0, 600.0, v);
+        pxPerSec = jlimit (5.0, 2000.0, v);
         layoutContent();
         repaintRows();
     }
 
+    // Zoom que mantiene quieto el punto bajo el ratón (Ctrl + rueda)
+    void zoomAt (double factor, int contentX)
+    {
+        const double anchor = jmax (0.0, (contentX - ui::headerW) / pxPerSec);
+        const int screenOffset = contentX - viewport.getViewPositionX();
+
+        setZoom (pxPerSec * factor);
+
+        const int newX = ui::headerW + (int) (anchor * pxPerSec);
+        viewport.setViewPosition (jmax (0, newX - screenOffset), viewport.getViewPositionY());
+    }
+
+    // Arrastrar en la regla de tiempo define la región del bucle (con imán a la rejilla)
+    void setLoopFromRuler (int x0, int x1)
+    {
+        auto toSample = [this] (int x)
+        {
+            return snapSample ((int64) (jmax (0.0, (x - ui::headerW) / pxPerSec) * engine.sampleRate));
+        };
+
+        const int64 a = toSample (jmin (x0, x1)), b = toSample (jmax (x0, x1));
+        if (b - a < (int64) (engine.sampleRate * 0.05)) return;
+
+        engine.loopStart = a;
+        engine.loopEnd = b;
+        engine.loopOn = true;
+        syncLoopButton();
+    }
+
+    void syncLoopButton()
+    {
+        bLoop.setToggleState (engine.loopOn.load(), dontSendNotification);
+        loopOverlay.repaint();
+    }
+
+    // Si el clip seleccionado ya no existe (borrado, dividido...), se quita la selección.
+    void validateSelection()
+    {
+        if (selClip == nullptr) return;
+        for (auto& t : engine.tracks)
+            for (auto& c : t->clips)
+                if (c.get() == selClip) return;
+        selTrack = nullptr;
+        selClip = nullptr;
+    }
+
+    void deleteSelectedClip()
+    {
+        if (selClip == nullptr || selTrack == nullptr || ! engine.hasTrack (selTrack)) return;
+
+        for (auto& c : selTrack->clips)
+            if (c.get() == selClip)
+            {
+                engine.removeClip (*selTrack, selClip);
+                selTrack = nullptr;
+                selClip = nullptr;
+                clipsChanged();
+                return;
+            }
+    }
+
+    void setStatus (const String& s)
+    {
+        statusLabel.setText (s, dontSendNotification);
+        statusTicks = 90;     // ~3 segundos
+    }
+
+    // Refresca los controles de la barra con los datos del proyecto (tempo, rejilla, bucle)
+    void syncControls()
+    {
+        bpmSlider.setValue (engine.bpm.load(), dontSendNotification);
+        gridBox.setSelectedId (jlimit (1, ui::numGridItems, engine.gridId), dontSendNotification);
+        syncLoopButton();
+        content.repaint();
+        repaintRows();
+    }
+
+    void saveProjectQuick()
+    {
+        if (currentProject == File())
+            saveProject();            // primera vez: pide el nombre
+        else
+            doSave (currentProject);
+    }
+
+    void doSave (const File& f)
+    {
+        if (engine.saveProject (f))
+        {
+            currentProject = f;
+            setStatus (T ("Guardado: ") + f.getFileName());
+        }
+        else
+        {
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Guardar", "No se pudo guardar el proyecto.");
+        }
+    }
+
     void rebuildRows()
     {
+        selTrack = nullptr;
+        selClip = nullptr;
         windows.clear();
         rows.clear();
         for (auto& t : engine.tracks)
@@ -758,11 +1233,23 @@ private:
         }
 
         for (auto& r : rows) r->updateMeters();
+
+        const int64 ls = engine.loopStart.load(), le = engine.loopEnd.load();
+        const bool lo = engine.loopOn.load();
+        if (ls != lastLoopS || le != lastLoopE || lo != lastLoopOn)
+        {
+            lastLoopS = ls; lastLoopE = le; lastLoopOn = lo;
+            syncLoopButton();
+        }
+
+        if (statusTicks > 0 && --statusTicks == 0)
+            statusLabel.setText ({}, dontSendNotification);
+
         bPlay.setColour (TextButton::buttonColourId, engine.playing ? Colour (0xff2e9d4f) : Colour (0xff3a3a3a));
         bRec.setColour (TextButton::buttonColourId, engine.recording ? Colour (0xffcc2222) : Colour (0xff3a3a3a));
         bPlay.repaint();
         bRec.repaint();
-        repaint (getWidth() - 190, 0, 190, 44);
+        repaint (getWidth() - 190, 0, 190, ui::toolbarH);
     }
 
     // ------------------------- Transporte ----------------------------------
@@ -812,15 +1299,14 @@ private:
 
     void saveProject()
     {
-        chooser = std::make_unique<FileChooser> (T ("Guardar proyecto"), File(), "*.lapauta");
+        chooser = std::make_unique<FileChooser> (T ("Guardar proyecto"), currentProject, "*.lapauta");
         chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles
                                   | FileBrowserComponent::warnAboutOverwriting,
                               [this] (const FileChooser& fc)
         {
             auto f = fc.getResult();
             if (f == File()) return;
-            if (! engine.saveProject (f.withFileExtension ("lapauta")))
-                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Guardar", "No se pudo guardar el proyecto.");
+            doSave (f.withFileExtension ("lapauta"));
         });
     }
 
@@ -838,6 +1324,12 @@ private:
             String err;
             const bool ok = engine.loadProject (f, err);
             rebuildRows();
+            if (ok)
+            {
+                currentProject = f;
+                syncControls();
+                setStatus (T ("Abierto: ") + f.getFileName());
+            }
             if (err.isNotEmpty())
                 AlertWindow::showMessageBoxAsync (ok ? MessageBoxIconType::InfoIcon : MessageBoxIconType::WarningIcon,
                                                   "Proyecto", err);
@@ -885,14 +1377,13 @@ private:
 
     void scanPlugins()
     {
-        scanJob = std::make_unique<ScanJob> (engine.host, [this]
+        SafePointer<MainComponent> sp (this);
+        scanJob = std::make_unique<ScanJob> (engine.host, [this, sp]
         {
             engine.host.saveList();
-            SafePointer<MainComponent> safeThis (this);
-            MessageManager::callAsync ([safeThis]
+            MessageManager::callAsync ([sp]
             {
-                if (auto* self = safeThis.getComponent())
-                    self->showReport();
+                if (auto* self = sp.getComponent()) self->showReport();
             });
         });
         scanJob->launchThread();
@@ -919,35 +1410,16 @@ private:
     void openEditor (AudioPluginInstance& p)
     {
         for (auto& w : windows)
+            if (w->plugin == &p) { w->toFront (true); return; }
+
+        SafePointer<MainComponent> sp (this);
+        windows.push_back (std::make_unique<PluginWindow> (p, [sp] (PluginWindow* w)
         {
-            if (w->plugin == &p)
+            MessageManager::callAsync ([sp, w]
             {
-                w->toFront (true);
-                return;
-            }
-        }
-
-        // Crear el SafePointer antes de entrar en las lambdas.
-        SafePointer<MainComponent> safeThis (this);
-
-        windows.push_back (
-            std::make_unique<PluginWindow> (
-                p,
-                [safeThis] (PluginWindow* w)
-                {
-                    // No destruir la ventana dentro de closeButtonPressed().
-                    PluginWindow* windowToClose = w;
-
-                    MessageManager::callAsync (
-                        [safeThis, windowToClose]()
-                        {
-                            if (auto* self = safeThis.getComponent())
-                                self->closeWindow (windowToClose);
-                        }
-                    );
-                }
-            )
-        );
+                if (auto* self = sp.getComponent()) self->closeWindow (w);
+            });
+        }));
     }
 
     void closeWindow (PluginWindow* w)
@@ -974,12 +1446,23 @@ private:
     std::vector<std::unique_ptr<TrackRow>> rows;
 
     TimelineContent content;
+    LoopOverlay loopOverlay { engine, [this] { return pxPerSec; } };
     Playhead playhead;
     Viewport viewport;
 
     TextButton bHome, bPlay, bStop, bRec, bAdd, bAddBus, bImport, bZoomOut, bZoomIn, bAudio, bScan, bReport, bOpen, bSave;
-    Label timeLabel;
-    Slider master;
+    TextButton bSelect, bHand, bCut, bLoop;
+    Label timeLabel, bpmLabel, gridLabel, statusLabel;
+    Slider master, bpmSlider;
+    ComboBox gridBox;
+
+    int tool = ui::toolSelect;
+    Track* selTrack = nullptr;
+    Clip* selClip = nullptr;
+    File currentProject;
+    int statusTicks = 0;
+    int64 lastLoopS = -1, lastLoopE = -1;
+    bool lastLoopOn = false;
     Rectangle<int> masterMeterBounds;
 
     std::unique_ptr<FileChooser> chooser;
