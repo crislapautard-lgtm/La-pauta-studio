@@ -21,7 +21,8 @@ FetchContent_MakeAvailable(JUCE)
 juce_add_gui_app(LaPautaStudio
     PRODUCT_NAME "La Pauta Studio"
     COMPANY_NAME "La Pauta"
-    VERSION 0.1.0)
+    VERSION 0.1.0
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Assets/LaPautaStudio.ico")
 
 juce_generate_juce_header(LaPautaStudio)
 
