@@ -20,6 +20,75 @@ struct Clip
 };
 
 // ---------------------------------------------------------------------------
+// Automatización: una envolvente es una curva de puntos (valores normalizados 0..1)
+// que controla volumen, pan, mute, un parámetro de un plugin o su bypass.
+// ---------------------------------------------------------------------------
+enum EnvTarget { envVolume = 0, envPan = 1, envMute = 2, envParam = 3, envBypass = 4 };
+
+// Escala del volumen en las envolventes: -60 dB .. +6 dB (centro de la curva en -12 dB, como los faders)
+inline NormalisableRange<double> volumeRange()
+{
+    NormalisableRange<double> r (-60.0, 6.0);
+    r.setSkewForCentre (-12.0);
+    return r;
+}
+
+inline float envToGain (float norm)
+{
+    return Decibels::decibelsToGain ((float) volumeRange().convertFrom0to1 ((double) norm), -60.0f);
+}
+
+struct EnvPoint
+{
+    int64 sample = 0;
+    float value = 0.0f;
+};
+
+struct Envelope
+{
+    int target = envVolume;
+    AudioPluginInstance* plugin = nullptr;        // solo para envParam / envBypass
+    AudioProcessorParameter* param = nullptr;     // solo para envParam
+    int paramIndex = -1;
+    String name;
+
+    std::atomic<bool> active { true };            // si está desactivada, se ignora (los puntos se conservan)
+    bool visible = false;                         // solo interfaz: mostrar la franja bajo la pista
+    std::vector<EnvPoint> points;                 // ordenados por muestra
+    float lastApplied = -1.0f;                    // solo hilo de audio: último valor enviado al plugin
+
+    // Mute y bypass son de tipo escalón (encendido/apagado); el resto interpola en línea recta.
+    bool isStep() const { return target == envMute || target == envBypass; }
+
+    bool hasEffect() const { return active.load() && ! points.empty(); }
+
+    float valueAt (int64 s) const
+    {
+        const size_t n = points.size();
+        if (n == 0) return 0.0f;
+        if (s <= points.front().sample) return points.front().value;
+        if (s >= points.back().sample)  return points.back().value;
+
+        size_t lo = 0, hi = n - 1;                    // lo: último punto con muestra <= s
+        while (hi - lo > 1)
+        {
+            const size_t mid = (lo + hi) / 2;
+            if (points[mid].sample <= s) lo = mid; else hi = mid;
+        }
+
+        const auto& a = points[lo];
+        const auto& b = points[hi];
+        if (isStep()) return a.value;
+
+        const double t = (double) (s - a.sample) / (double) jmax<int64> (1, b.sample - a.sample);
+        return (float) (a.value + (b.value - a.value) * t);
+    }
+};
+
+using PluginList = std::vector<std::unique_ptr<AudioPluginInstance>>;
+using EnvList = std::vector<std::unique_ptr<Envelope>>;
+
+// ---------------------------------------------------------------------------
 // Track: pista con clips, cadena de plugins, volumen, pan, mute/solo/armado.
 // ---------------------------------------------------------------------------
 struct Track
@@ -27,6 +96,8 @@ struct Track
     String name { "Pista" };
     std::vector<std::unique_ptr<Clip>> clips;
     std::vector<std::unique_ptr<AudioPluginInstance>> plugins;
+    EnvList envs;                                      // automatización de la pista y de sus plugins
+    float lastGL = -1.0f, lastGR = -1.0f;              // solo hilo de audio: ganancias del bloque anterior (rampa)
 
     std::atomic<float> gain { 1.0f }, pan { 0.0f }, peakL { 0.0f }, peakR { 0.0f };
     std::atomic<bool> mute { false }, solo { false }, armed { false };
@@ -59,7 +130,7 @@ public:
     {
         formats.registerBasicFormats();   // WAV, AIFF, FLAC, OGG, MP3 (lectura) ...
         writerThread.startThread();
-        mix.setSize (2, maxBlock);
+        mix.setSize (8, maxBlock);   // 2 canales de salida + canales extra que algunos plugins piden
     }
 
     ~Engine() override
@@ -245,10 +316,134 @@ public:
         {
             const SpinLock::ScopedLockType sl (lock);
             if (! isPositiveAndBelow (index, (int) t.plugins.size())) return;
+            dropEnvelopesOf (t.envs, t.plugins[(size_t) index].get());
             dead = std::move (t.plugins[(size_t) index]);
             t.plugins.erase (t.plugins.begin() + index);
         }
         dead->releaseResources();
+    }
+
+    // ------------------------ Plugins del canal Master ----------------------
+    void addMasterPlugin (std::unique_ptr<AudioPluginInstance> p)
+    {
+        p->setRateAndBufferSizeDetails (sampleRate, maxBlock);
+        p->prepareToPlay (sampleRate, maxBlock);
+        const SpinLock::ScopedLockType sl (lock);
+        masterPlugins.push_back (std::move (p));
+    }
+
+    void removeMasterPlugin (int index)
+    {
+        std::unique_ptr<AudioPluginInstance> dead;
+        {
+            const SpinLock::ScopedLockType sl (lock);
+            if (! isPositiveAndBelow (index, (int) masterPlugins.size())) return;
+            dropEnvelopesOf (masterEnvs, masterPlugins[(size_t) index].get());
+            dead = std::move (masterPlugins[(size_t) index]);
+            masterPlugins.erase (masterPlugins.begin() + index);
+        }
+        dead->releaseResources();
+    }
+
+    // ------------------------------ Automatización --------------------------
+    // 't' = nullptr significa el canal Master.
+    EnvList& envsOf (Track* t)       { return t != nullptr ? t->envs : masterEnvs; }
+    PluginList& pluginsOf (Track* t) { return t != nullptr ? t->plugins : masterPlugins; }
+
+    static String envDisplayName (int target, AudioPluginInstance* plugin, AudioProcessorParameter* param)
+    {
+        const String fx = plugin != nullptr ? plugin->getName() : String ("FX");
+        switch (target)
+        {
+            case envVolume: return "Volumen";
+            case envPan:    return "Pan";
+            case envMute:   return "Mute";
+            case envBypass: return fx + " > Bypass";
+            default:        return fx + " > " + (param != nullptr ? param->getName (40) : String ("?"));
+        }
+    }
+
+    Envelope* findEnvelope (EnvList& list, int target, AudioPluginInstance* plugin, int paramIndex)
+    {
+        for (auto& e : list)
+            if (e->target == target && e->plugin == plugin && e->paramIndex == paramIndex)
+                return e.get();
+        return nullptr;
+    }
+
+    // Devuelve la envolvente pedida; si no existe la crea (vacía). Puede devolver nullptr si el parámetro no existe.
+    Envelope* getOrCreateEnvelope (EnvList& list, int target, AudioPluginInstance* plugin, int paramIndex)
+    {
+        if (auto* found = findEnvelope (list, target, plugin, paramIndex))
+            return found;
+
+        auto e = std::make_unique<Envelope>();
+        e->target = target;
+        e->plugin = plugin;
+        e->paramIndex = paramIndex;
+
+        if (target == envParam)
+        {
+            if (plugin == nullptr) return nullptr;
+            auto& ps = plugin->getParameters();
+            if (! isPositiveAndBelow (paramIndex, ps.size())) return nullptr;
+            e->param = ps[paramIndex];
+        }
+        e->name = envDisplayName (target, plugin, e->param);
+
+        auto* raw = e.get();
+        const SpinLock::ScopedLockType sl (lock);
+        list.push_back (std::move (e));
+        return raw;
+    }
+
+    // Edición de puntos (siempre desde el hilo de la interfaz)
+    void envAddPoint (Envelope& e, int64 s, float v)
+    {
+        s = jmax<int64> (0, s);
+        v = jlimit (0.0f, 1.0f, v);
+
+        const SpinLock::ScopedLockType sl (lock);
+        size_t i = 0;
+        while (i < e.points.size() && e.points[i].sample < s) ++i;
+
+        if (i < e.points.size() && e.points[i].sample == s)
+            e.points[i].value = v;
+        else
+            e.points.insert (e.points.begin() + (long) i, EnvPoint { s, v });
+    }
+
+    // Mueve un punto sin saltarse a sus vecinos (así la lista siempre queda ordenada)
+    void envSetPoint (Envelope& e, int idx, int64 s, float v)
+    {
+        const SpinLock::ScopedLockType sl (lock);
+        if (! isPositiveAndBelow (idx, (int) e.points.size())) return;
+
+        const int64 lo = idx > 0 ? e.points[(size_t) idx - 1].sample + 1 : 0;
+        const int64 hi = idx + 1 < (int) e.points.size() ? e.points[(size_t) idx + 1].sample - 1
+                                                          : std::numeric_limits<int64>::max();
+        e.points[(size_t) idx] = EnvPoint { jlimit (lo, jmax (lo, hi), s), jlimit (0.0f, 1.0f, v) };
+    }
+
+    void envRemovePoint (Envelope& e, int idx)
+    {
+        const SpinLock::ScopedLockType sl (lock);
+        if (isPositiveAndBelow (idx, (int) e.points.size()))
+            e.points.erase (e.points.begin() + idx);
+    }
+
+    void envClear (Envelope& e)
+    {
+        const SpinLock::ScopedLockType sl (lock);
+        e.points.clear();
+    }
+
+    // Se llama con 'lock' tomado: quita las envolventes que apuntan a un plugin que se va a destruir
+    static void dropEnvelopesOf (EnvList& list, AudioPluginInstance* p)
+    {
+        list.erase (std::remove_if (list.begin(), list.end(),
+                                    [p] (const std::unique_ptr<Envelope>& e) { return e->plugin == p; }),
+                    list.end());
     }
 
     // ----------------------------- Transporte ------------------------------
@@ -379,7 +574,24 @@ public:
                 p->getStateInformation (mb);
                 fx->setAttribute ("state", mb.toBase64Encoding());
             }
+
+            saveEnvelopes (*te, t->envs, t->plugins);
         }
+
+        auto* menv = root.createNewChildElement ("MASTERENV");
+        saveEnvelopes (*menv, masterEnvs, masterPlugins);
+
+        auto* mfx = root.createNewChildElement ("MASTERFX");
+        for (auto& p : masterPlugins)
+        {
+            auto* fx = mfx->createNewChildElement ("FX");
+            if (auto desc = p->getPluginDescription().createXml())
+                fx->addChildElement (desc.release());
+            MemoryBlock mb;
+            p->getStateInformation (mb);
+            fx->setAttribute ("state", mb.toBase64Encoding());
+        }
+
         return root.writeTo (f);
     }
 
@@ -400,6 +612,17 @@ public:
                 old.swap (tracks);
             }
         }   // pistas viejas destruidas aquí
+
+        {
+            std::vector<std::unique_ptr<AudioPluginInstance>> oldFx;
+            EnvList oldEnvs;
+            {
+                const SpinLock::ScopedLockType sl (lock);
+                oldFx.swap (masterPlugins);
+                oldEnvs.swap (masterEnvs);
+            }
+            for (auto& p : oldFx) p->releaseResources();
+        }   // plugins viejos del master destruidos aquí
 
         masterGain = (float) xml->getDoubleAttribute ("master", 1.0);
         bpm = jlimit (20.0, 400.0, xml->getDoubleAttribute ("bpm", 120.0));
@@ -433,11 +656,12 @@ public:
                 else ++missing;
             }
 
+            std::vector<AudioPluginInstance*> orig;    // posición original del plugin -> instancia (nullptr si no cargó)
             for (auto* fx : te->getChildWithTagNameIterator ("FX"))
             {
                 PluginDescription d;
                 auto* de = fx->getChildByName ("PLUGIN");
-                if (de == nullptr || ! d.loadFromXml (*de)) { ++missing; continue; }
+                if (de == nullptr || ! d.loadFromXml (*de)) { orig.push_back (nullptr); ++missing; continue; }
 
                 String perr;
                 if (auto inst = host.create (d, sampleRate, maxBlock, perr))
@@ -445,10 +669,14 @@ public:
                     MemoryBlock mb;
                     if (mb.fromBase64Encoding (fx->getStringAttribute ("state")))
                         inst->setStateInformation (mb.getData(), (int) mb.getSize());
+                    auto* raw = inst.get();
                     addPlugin (*t, std::move (inst));
+                    orig.push_back (raw);
                 }
-                else ++missing;
+                else { orig.push_back (nullptr); ++missing; }
             }
+
+            loadEnvelopes (*te, t->envs, orig);
         }
 
         // Reconectar salidas y envíos (ya existen todas las pistas)
@@ -468,6 +696,30 @@ public:
             }
         }
 
+        std::vector<AudioPluginInstance*> origMaster;
+        if (auto* mfx = xml->getChildByName ("MASTERFX"))
+            for (auto* fx : mfx->getChildWithTagNameIterator ("FX"))
+            {
+                PluginDescription d;
+                auto* de = fx->getChildByName ("PLUGIN");
+                if (de == nullptr || ! d.loadFromXml (*de)) { origMaster.push_back (nullptr); ++missing; continue; }
+
+                String perr;
+                if (auto inst = host.create (d, sampleRate, maxBlock, perr))
+                {
+                    MemoryBlock mb;
+                    if (mb.fromBase64Encoding (fx->getStringAttribute ("state")))
+                        inst->setStateInformation (mb.getData(), (int) mb.getSize());
+                    auto* raw = inst.get();
+                    addMasterPlugin (std::move (inst));
+                    origMaster.push_back (raw);
+                }
+                else { origMaster.push_back (nullptr); ++missing; }
+            }
+
+        if (auto* menv = xml->getChildByName ("MASTERENV"))
+            loadEnvelopes (*menv, masterEnvs, origMaster);
+
         if (missing > 0)
             err = String (missing) + " elemento(s) no se pudieron cargar (archivo o plugin faltante)";
         return true;
@@ -483,7 +735,13 @@ public:
         sampleRate = sr;
         blockSize = bs;
         maxBlock = jmax (bs, 2048);
-        mix.setSize (2, maxBlock);
+        mix.setSize (8, maxBlock);
+
+        for (auto& p : masterPlugins)
+        {
+            p->setRateAndBufferSizeDetails (sr, maxBlock);
+            p->prepareToPlay (sr, maxBlock);
+        }
 
         for (auto& t : tracks)
         {
@@ -553,20 +811,34 @@ public:
                 }
             }
 
-            for (auto& p : t->plugins)
+            // Automatización: los parámetros de plugins se envían antes de procesar el bloque;
+            // volumen, pan y mute actúan junto al fader (el fader sirve de ajuste fino, "trim").
+            applyParamEnvelopes (t->envs, pos);
+
+            float envGain = 1.0f, envPan = 0.0f;
+            bool envMuted = false;
+            for (auto& e : t->envs)
             {
-                const int nc = jmin (8, jmax (2, p->getTotalNumInputChannels(), p->getTotalNumOutputChannels()));
-                for (int c = 2; c < nc; ++c) b.clear (c, 0, n);
-                AudioBuffer<float> view (b.getArrayOfWritePointers(), nc, n);
-                midi.clear();
-                p->processBlock (view, midi);
+                if (! e->hasEffect()) continue;
+                const float v = e->valueAt (pos);
+                if (e->target == envVolume)    envGain = envToGain (v);
+                else if (e->target == envPan)  envPan = v * 2.0f - 1.0f;
+                else if (e->target == envMute) envMuted = v >= 0.5f;
             }
 
-            const bool silent = t->mute.load() || (! bus && anySolo && ! t->solo.load());
-            const float g = silent ? 0.0f : t->gain.load();
-            const float pn = t->pan.load();
-            b.applyGain (0, 0, n, g * (pn > 0 ? 1.0f - pn : 1.0f));
-            b.applyGain (1, 0, n, g * (pn < 0 ? 1.0f + pn : 1.0f));
+            for (auto& p : t->plugins)
+                processPlugin (*p, b, n, isBypassed (t->envs, p.get(), pos));
+
+            const bool silent = t->mute.load() || envMuted || (! bus && anySolo && ! t->solo.load());
+            const float g = silent ? 0.0f : t->gain.load() * envGain;
+            const float pn = jlimit (-1.0f, 1.0f, t->pan.load() + envPan);
+            const float gl = g * (pn > 0 ? 1.0f - pn : 1.0f);
+            const float gr = g * (pn < 0 ? 1.0f + pn : 1.0f);
+            if (t->lastGL < 0.0f) { t->lastGL = gl; t->lastGR = gr; }
+            b.applyGainRamp (0, 0, n, t->lastGL, gl);       // rampa dentro del bloque: sin chasquidos
+            b.applyGainRamp (1, 0, n, t->lastGR, gr);
+            t->lastGL = gl;
+            t->lastGR = gr;
 
             t->peakL = jmax (b.getMagnitude (0, 0, n), t->peakL.load() * 0.85f);
             t->peakR = jmax (b.getMagnitude (1, 0, n), t->peakR.load() * 0.85f);
@@ -598,7 +870,21 @@ public:
             }
         }
 
-        mix.applyGain (0, n, masterGain.load());
+        // Canal Master: automatización y plugins en cadena antes del volumen general
+        applyParamEnvelopes (masterEnvs, pos);
+
+        float masterEnvGain = 1.0f;
+        for (auto& e : masterEnvs)
+            if (e->target == envVolume && e->hasEffect())
+                masterEnvGain = envToGain (e->valueAt (pos));
+
+        for (auto& p : masterPlugins)
+            processPlugin (*p, mix, n, isBypassed (masterEnvs, p.get(), pos));
+
+        const float mg = masterGain.load() * masterEnvGain;
+        if (lastMasterG < 0.0f) lastMasterG = mg;
+        mix.applyGainRamp (0, n, lastMasterG, mg);
+        lastMasterG = mg;
 
         if (numOut >= 2)
         {
@@ -636,6 +922,8 @@ public:
     TimeSliceThread writerThread;   // debe declararse ANTES que 'tracks' (los writers dependen de él)
 
     std::vector<std::unique_ptr<Track>> tracks;
+    std::vector<std::unique_ptr<AudioPluginInstance>> masterPlugins;   // cadena de efectos del canal Master
+    EnvList masterEnvs;                                                // automatización del Master
     std::atomic<bool> playing { false }, recording { false };
     std::atomic<int64> position { 0 };
     std::atomic<float> masterGain { 1.0f }, masterPeakL { 0.0f }, masterPeakR { 0.0f };
@@ -665,6 +953,110 @@ private:
             b.addFrom (ch, dst, c.audio, ch, src, len);
     }
 
+    // --- automatización (hilo de audio) ---
+    static void applyParamEnvelopes (EnvList& list, int64 pos)
+    {
+        for (auto& e : list)
+        {
+            if (e->target != envParam || e->param == nullptr || ! e->hasEffect()) continue;
+
+            // Solo se envía cuando el valor de la curva cambia: así, si mueves el mando a mano
+            // mientras la curva está quieta, tu ajuste se respeta.
+            const float v = e->valueAt (pos);
+            if (v != e->lastApplied)
+            {
+                e->param->setValue (v);
+                e->lastApplied = v;
+            }
+        }
+    }
+
+    static bool isBypassed (const EnvList& list, AudioPluginInstance* p, int64 pos)
+    {
+        for (auto& e : list)
+            if (e->target == envBypass && e->plugin == p && e->hasEffect())
+                return e->valueAt (pos) >= 0.5f;
+        return false;
+    }
+
+    void processPlugin (AudioPluginInstance& p, AudioBuffer<float>& b, int n, bool bypassed)
+    {
+        const int nc = jmin (8, jmax (2, p.getTotalNumInputChannels(), p.getTotalNumOutputChannels()));
+        for (int c = 2; c < nc; ++c) b.clear (c, 0, n);
+        AudioBuffer<float> view (b.getArrayOfWritePointers(), nc, n);
+        midi.clear();
+
+        if (bypassed) p.processBlockBypassed (view, midi);
+        else          p.processBlock (view, midi);
+    }
+
+    // --- guardar / cargar envolventes ---
+    static int indexOfPlugin (const PluginList& v, AudioPluginInstance* p)
+    {
+        for (size_t i = 0; i < v.size(); ++i)
+            if (v[i].get() == p) return (int) i;
+        return -1;
+    }
+
+    static String pointsToString (const Envelope& e)
+    {
+        String s;
+        for (auto& p : e.points)
+            s << String (p.sample) << ":" << String (p.value, 6) << ",";
+        return s;
+    }
+
+    void saveEnvelopes (XmlElement& parent, const EnvList& list, const PluginList& plugins) const
+    {
+        for (auto& e : list)
+        {
+            auto* ee = parent.createNewChildElement ("ENV");
+            ee->setAttribute ("target", e->target);
+            ee->setAttribute ("plugin", indexOfPlugin (plugins, e->plugin));
+            ee->setAttribute ("param", e->paramIndex);
+            ee->setAttribute ("active", e->active.load());
+            ee->setAttribute ("visible", e->visible);
+            ee->setAttribute ("pts", pointsToString (*e));
+        }
+    }
+
+    // 'orig' = plugins de esa pista/canal en el orden en que se guardaron (nullptr si no se pudo cargar)
+    void loadEnvelopes (const XmlElement& parent, EnvList& list, const std::vector<AudioPluginInstance*>& orig)
+    {
+        for (auto* ee : parent.getChildWithTagNameIterator ("ENV"))
+        {
+            const int target = ee->getIntAttribute ("target", envVolume);
+            AudioPluginInstance* plugin = nullptr;
+
+            if (target == envParam || target == envBypass)
+            {
+                const int idx = ee->getIntAttribute ("plugin", -1);
+                if (! isPositiveAndBelow (idx, (int) orig.size()) || orig[(size_t) idx] == nullptr)
+                    continue;                                   // su plugin ya no está: se descarta
+                plugin = orig[(size_t) idx];
+            }
+
+            auto* e = getOrCreateEnvelope (list, target, plugin, target == envParam ? ee->getIntAttribute ("param", -1) : -1);
+            if (e == nullptr) continue;
+
+            std::vector<EnvPoint> pts;
+            for (auto& token : StringArray::fromTokens (ee->getStringAttribute ("pts"), ",", ""))
+            {
+                auto parts = StringArray::fromTokens (token, ":", "");
+                if (parts.size() == 2)
+                    pts.push_back (EnvPoint { jmax<int64> (0, parts[0].getLargeIntValue()),
+                                              jlimit (0.0f, 1.0f, parts[1].getFloatValue()) });
+            }
+            std::sort (pts.begin(), pts.end(), [] (const EnvPoint& a, const EnvPoint& b) { return a.sample < b.sample; });
+
+            const SpinLock::ScopedLockType sl (lock);
+            e->active = ee->getBoolAttribute ("active", true);
+            e->visible = ee->getBoolAttribute ("visible", false);
+            e->points = std::move (pts);
+        }
+    }
+
+    float lastMasterG = -1.0f;
     SpinLock lock;
     AudioBuffer<float> mix;
     MidiBuffer midi;
