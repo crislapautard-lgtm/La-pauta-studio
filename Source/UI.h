@@ -551,9 +551,33 @@ public:
                 c->thumb->drawChannels (g, vis.withTrimmedTop (16).withTrimmedBottom (2), t0, t1, 1.0f);
             }
 
+            // fades: zona oscurecida + línea de la rampa + tirador para arrastrar
+            const int total = c->audio.getNumSamples();
+            const int fiW = (int) ((double) jlimit (0, total, c->fadeInSamples.load()) / eng.sampleRate * pps);
+            const int foW = (int) ((double) jlimit (0, total, c->fadeOutSamples.load()) / eng.sampleRate * pps);
+            g.setColour (Colours::black.withAlpha (0.45f));
+            if (fiW > 0)
+            {
+                Path p;
+                p.addTriangle ((float) r.getX(), (float) r.getY(), (float) (r.getX() + fiW), (float) r.getY(), (float) r.getX(), (float) r.getBottom());
+                g.fillPath (p);
+            }
+            if (foW > 0)
+            {
+                Path p;
+                p.addTriangle ((float) r.getRight(), (float) r.getY(), (float) (r.getRight() - foW), (float) r.getY(), (float) r.getRight(), (float) r.getBottom());
+                g.fillPath (p);
+            }
+            g.setColour (Colours::orange);
+            if (fiW > 0) g.drawLine ((float) r.getX(), (float) r.getBottom(), (float) (r.getX() + fiW), (float) r.getY(), 1.5f);
+            if (foW > 0) g.drawLine ((float) (r.getRight() - foW), (float) r.getY(), (float) r.getRight(), (float) r.getBottom(), 1.5f);
+            g.setColour (Colours::white);
+            g.fillRect (r.getX() + fiW - 4, r.getY(), 8, 8);                    // tirador fade in
+            g.fillRect (r.getRight() - foW - 4, r.getY(), 8, 8);                // tirador fade out
+
             g.setColour (Colours::white);
             g.setFont (12.0f);
-            g.drawText (c->name, r.getX() + 4, r.getY() + 1, jmax (10, r.getWidth() - 8), 14, Justification::left, true);
+            g.drawText (c->name, r.getX() + 14, r.getY() + 1, jmax (10, r.getWidth() - 28), 14, Justification::left, true);
             g.setColour (Colours::black.withAlpha (0.6f));
             g.drawRect (r);
         }
@@ -582,6 +606,28 @@ public:
         if (e.x < ui::headerW) return;
 
         auto* c = clipAt (e.x);
+
+        // tiradores de fade (esquinas superiores del clip): arrastra para dar duración al fade in / out
+        fadeClip = nullptr;
+        if (c != nullptr && ! e.mods.isPopupMenu() && e.y <= 14)
+        {
+            const double pps = owner.pps();
+            const int x0 = ui::headerW + (int) ((double) c->startSample.load() / eng.sampleRate * pps);
+            const int x1 = x0 + (int) ((double) c->audio.getNumSamples() / eng.sampleRate * pps);
+            const int fiX = x0 + (int) ((double) c->fadeInSamples.load() / eng.sampleRate * pps);
+            const int foX = x1 - (int) ((double) c->fadeOutSamples.load() / eng.sampleRate * pps);
+
+            const bool nearOut = std::abs (e.x - foX) <= 8;
+            const bool nearIn  = std::abs (e.x - fiX) <= 8;
+            if (nearOut || nearIn)
+            {
+                // si ambos tiradores coinciden (sin fades), manda el más cercano al borde pulsado
+                fadeIsOut = nearOut && (! nearIn || std::abs (e.x - x1) < std::abs (e.x - x0));
+                fadeClip = c;
+                owner.setSelected (&track, c);
+                return;
+            }
+        }
 
         if (e.mods.isPopupMenu())
         {
@@ -616,6 +662,19 @@ public:
     void mouseDrag (const MouseEvent& e) override
     {
         if (lanes.mouseDrag (e, ui::rowH)) return;
+
+        if (fadeClip != nullptr)
+        {
+            if (! ownsClip (fadeClip)) { fadeClip = nullptr; return; }
+            const int total = fadeClip->audio.getNumSamples();
+            const int64 s = fadeClip->startSample.load();
+            const int64 here = sampleAt (e.x);
+            if (fadeIsOut) fadeClip->fadeOutSamples = (int) jlimit<int64> (0, total, s + total - here);
+            else           fadeClip->fadeInSamples  = (int) jlimit<int64> (0, total, here - s);
+            repaint();
+            return;
+        }
+
         if (dragClip == nullptr) return;
         const auto delta = (int64) (e.getDistanceFromDragStartX() / owner.pps() * eng.sampleRate);
         dragClip->startSample = jmax<int64> (0, owner.snapSample (dragOrigStart + delta));
@@ -625,6 +684,7 @@ public:
     void mouseUp (const MouseEvent&) override
     {
         lanes.mouseUp();
+        fadeClip = nullptr;
         if (dragClip != nullptr) { dragClip = nullptr; owner.clipsChanged(); }
     }
 
@@ -672,6 +732,17 @@ private:
             m.addItem (2, T ("Eliminar clip (Supr)"));
             m.addItem (3, T ("Bucle sobre este clip"));
             m.addSeparator();
+
+            PopupMenu fo, fi;
+            for (int i = 0; i < 6; ++i)
+            {
+                const String label = i == 0 ? T ("Sin fade") : String (fadeSecs[i], 2) + " s";
+                fo.addItem (30 + i, label);
+                fi.addItem (40 + i, label);
+            }
+            m.addSubMenu (T ("Fade out (al final del audio)"), fo);
+            m.addSubMenu (T ("Fade in (al inicio del audio)"), fi);
+            m.addSeparator();
         }
         m.addItem (20, T ("Activar / desactivar bucle"));
 
@@ -687,6 +758,15 @@ private:
             if (! self->ownsClip (c)) return;   // el clip pudo borrarse con el menú abierto
 
             if (r == 3) { self->owner.setLoopFromClip (*c); return; }
+
+            if ((r >= 30 && r < 36) || (r >= 40 && r < 46))
+            {
+                const bool out = r < 40;
+                const int n = jmin (c->audio.getNumSamples(), (int) (fadeSecs[r - (out ? 30 : 40)] * self->eng.sampleRate));
+                (out ? c->fadeOutSamples : c->fadeInSamples) = n;
+                self->repaint();
+                return;
+            }
             if (r == 1) self->eng.splitClip (self->track, c, self->eng.position.load());
             if (r == 2) self->eng.removeClip (self->track, c);
 
@@ -719,7 +799,11 @@ private:
     EnvLanes lanes { eng, owner, *this, &track };
     int64 lastPos = -1;
 
+    static constexpr double fadeSecs[6] = { 0.0, 0.25, 0.5, 1.0, 2.0, 4.0 };
+
     Clip* dragClip = nullptr;
+    Clip* fadeClip = nullptr;       // clip cuyo fade se está arrastrando
+    bool fadeIsOut = true;
     int64 dragOrigStart = 0;
     float lastL = 0.0f, lastR = 0.0f;
 };

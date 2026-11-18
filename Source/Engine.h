@@ -16,6 +16,8 @@ struct Clip
     File file;
     AudioBuffer<float> audio;                 // siempre 2 canales
     std::atomic<int64> startSample { 0 };
+    std::atomic<int> fadeInSamples { 0 };     // duración del fade in (0 = sin fade)
+    std::atomic<int> fadeOutSamples { 0 };    // duración del fade out (0 = sin fade)
     std::unique_ptr<AudioThumbnail> thumb;
 };
 
@@ -285,6 +287,8 @@ public:
         }
         auto ca = makeClip (c->name, c->file, std::move (a), s);
         auto cb = makeClip (c->name, c->file, std::move (b), at);
+        ca->fadeInSamples = jmin (c->fadeInSamples.load(), (int) rel);                       // cada mitad conserva su borde
+        cb->fadeOutSamples = jmin (c->fadeOutSamples.load(), total - (int) rel);
 
         std::unique_ptr<Clip> dead;
         {
@@ -563,6 +567,8 @@ public:
                 auto* ce = te->createNewChildElement ("CLIP");
                 ce->setAttribute ("file", c->file.getFullPathName());
                 ce->setAttribute ("start", String (c->startSample.load()));
+                ce->setAttribute ("fadein", c->fadeInSamples.load());
+                ce->setAttribute ("fadeout", c->fadeOutSamples.load());
             }
 
             for (auto& p : t->plugins)
@@ -651,6 +657,8 @@ public:
                 if (auto c = loadClip (File (ce->getStringAttribute ("file"))))
                 {
                     c->startSample = ce->getStringAttribute ("start").getLargeIntValue();
+                    c->fadeInSamples = jmax (0, ce->getIntAttribute ("fadein", 0));
+                    c->fadeOutSamples = jmax (0, ce->getIntAttribute ("fadeout", 0));
                     addClip (*t, std::move (c));
                 }
                 else ++missing;
@@ -949,8 +957,32 @@ private:
 
         const int64 from = jmax (pos, cs), to = jmin (pos + n, ce);
         const int dst = dstOff + (int) (from - pos), src = (int) (from - cs), len = (int) (to - from);
+
+        const int total = c.audio.getNumSamples();
+        const int fi = jlimit (0, total, c.fadeInSamples.load());
+        const int fo = jlimit (0, total, c.fadeOutSamples.load());
+
+        if (fi == 0 && fo == 0)
+        {
+            for (int ch = 0; ch < 2; ++ch)
+                b.addFrom (ch, dst, c.audio, ch, src, len);
+            return;
+        }
+
+        // con fades: ganancia lineal por muestra (sube al entrar, baja al salir)
         for (int ch = 0; ch < 2; ++ch)
-            b.addFrom (ch, dst, c.audio, ch, src, len);
+        {
+            const float* in = c.audio.getReadPointer (ch);
+            float* out = b.getWritePointer (ch);
+            for (int i = 0; i < len; ++i)
+            {
+                const int r = src + i;
+                float g = 1.0f;
+                if (fi > 0 && r < fi)          g = (float) r / (float) fi;
+                if (fo > 0 && r >= total - fo) g = jmin (g, (float) (total - r) / (float) fo);
+                out[dst + i] += in[r] * g;
+            }
+        }
     }
 
     // --- automatización (hilo de audio) ---
