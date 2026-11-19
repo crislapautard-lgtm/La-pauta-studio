@@ -106,6 +106,11 @@ struct Track
     std::atomic<bool> mute { false }, solo { false }, armed { false };
     std::atomic<int> inputChannel { 0 };
 
+    // Input FX: efectos que se aplican a la entrada de la tarjeta ANTES de grabar (la grabación sale con ellos)
+    std::vector<std::unique_ptr<AudioPluginInstance>> inputPlugins;
+    std::atomic<bool> monitor { false };               // escuchar la entrada (con Input FX) mientras la pista está armada
+    AudioBuffer<float> inBuf;                          // 8 canales de trabajo para la entrada
+
     // Buses y envíos
     std::atomic<bool> isBus { false };                 // true = pista de bus (recibe audio de otras pistas)
     std::atomic<Track*> outputBus { nullptr };         // a qué bus va la salida (nullptr = Master)
@@ -157,6 +162,7 @@ public:
         t->name = name;
         t->isBus = bus;
         t->buf.setSize (8, maxBlock);
+        t->inBuf.setSize (8, maxBlock);
         auto* raw = t.get();
         const SpinLock::ScopedLockType sl (lock);
         tracks.push_back (std::move (t));
@@ -402,6 +408,27 @@ public:
         dead->releaseResources();
     }
 
+    // ------------------------ Input FX (efectos de entrada) -----------------
+    void addInputPlugin (Track& t, std::unique_ptr<AudioPluginInstance> p)
+    {
+        p->setRateAndBufferSizeDetails (sampleRate, maxBlock);
+        p->prepareToPlay (sampleRate, maxBlock);
+        const SpinLock::ScopedLockType sl (lock);
+        t.inputPlugins.push_back (std::move (p));
+    }
+
+    void removeInputPlugin (Track& t, int index)
+    {
+        std::unique_ptr<AudioPluginInstance> dead;
+        {
+            const SpinLock::ScopedLockType sl (lock);
+            if (! isPositiveAndBelow (index, (int) t.inputPlugins.size())) return;
+            dead = std::move (t.inputPlugins[(size_t) index]);
+            t.inputPlugins.erase (t.inputPlugins.begin() + index);
+        }
+        dead->releaseResources();
+    }
+
     // ------------------------ Plugins del canal Master ----------------------
     void addMasterPlugin (std::unique_ptr<AudioPluginInstance> p)
     {
@@ -600,7 +627,9 @@ public:
             p.second.reset();   // vacía y cierra el archivo
             if (auto clip = loadClip (p.first->recFile))
             {
-                clip->startSample = jmax<int64> (0, recStart - latency);   // compensa latencia
+                int64 fxLat = 0;                                           // latencia de los Input FX (lookahead, etc.)
+                for (auto& ip : p.first->inputPlugins) fxLat += ip->getLatencySamples();
+                clip->startSample = jmax<int64> (0, recStart - latency - fxLat);   // compensa latencia
                 addClip (*p.first, std::move (clip));
                 any = true;
             }
@@ -629,6 +658,7 @@ public:
             te->setAttribute ("solo", t->solo.load());
             te->setAttribute ("armed", t->armed.load());
             te->setAttribute ("input", t->inputChannel.load());
+            te->setAttribute ("monitor", t->monitor.load());
             te->setAttribute ("bus", t->isBus.load());
             te->setAttribute ("out", indexOf (t->outputBus.load()));
             for (int s = 0; s < 2; ++s)
@@ -659,6 +689,20 @@ public:
             }
 
             saveEnvelopes (*te, t->envs, t->plugins);
+
+            if (! t->inputPlugins.empty())
+            {
+                auto* ie = te->createNewChildElement ("INPUTFX");
+                for (auto& p : t->inputPlugins)
+                {
+                    auto* fx = ie->createNewChildElement ("FX");
+                    if (auto desc = p->getPluginDescription().createXml())
+                        fx->addChildElement (desc.release());
+                    MemoryBlock mb;
+                    p->getStateInformation (mb);
+                    fx->setAttribute ("state", mb.toBase64Encoding());
+                }
+            }
         }
 
         auto* menv = root.createNewChildElement ("MASTERENV");
@@ -771,6 +815,25 @@ public:
             }
 
             loadEnvelopes (*te, t->envs, orig);
+
+            t->monitor = te->getBoolAttribute ("monitor", false);
+            if (auto* ie = te->getChildByName ("INPUTFX"))
+                for (auto* fx : ie->getChildWithTagNameIterator ("FX"))
+                {
+                    PluginDescription d;
+                    auto* de = fx->getChildByName ("PLUGIN");
+                    if (de == nullptr || ! d.loadFromXml (*de)) { ++missing; continue; }
+
+                    String perr;
+                    if (auto inst = host.create (d, sampleRate, maxBlock, perr))
+                    {
+                        MemoryBlock mb;
+                        if (mb.fromBase64Encoding (fx->getStringAttribute ("state")))
+                            inst->setStateInformation (mb.getData(), (int) mb.getSize());
+                        addInputPlugin (*t, std::move (inst));
+                    }
+                    else ++missing;
+                }
         }
 
         // Reconectar salidas y envíos (ya existen todas las pistas)
@@ -830,6 +893,7 @@ public:
         blockSize = bs;
         maxBlock = jmax (bs, 2048);
         mix.setSize (8, maxBlock);
+        clickBuf.assign ((size_t) maxBlock, 0.0f);
 
         for (auto& p : masterPlugins)
         {
@@ -840,7 +904,13 @@ public:
         for (auto& t : tracks)
         {
             t->buf.setSize (8, maxBlock);
+            t->inBuf.setSize (8, maxBlock);
             for (auto& p : t->plugins)
+            {
+                p->setRateAndBufferSizeDetails (sr, maxBlock);
+                p->prepareToPlay (sr, maxBlock);
+            }
+            for (auto& p : t->inputPlugins)
             {
                 p->setRateAndBufferSizeDetails (sr, maxBlock);
                 p->prepareToPlay (sr, maxBlock);
@@ -871,6 +941,14 @@ public:
         const bool useLoop = loopOn.load() && ! isRec && (lE - lS) >= n && pos < lE && pos + n >= lE;
         const int len1 = useLoop ? (int) (lE - pos) : n;
 
+        const bool clickOn = isPlaying && metronome.load() && (int) clickBuf.size() >= n;
+        if (clickOn)
+        {
+            renderMetronome (pos, 0, len1);
+            if (useLoop && len1 < n)
+                renderMetronome (lS, len1, n - len1);
+        }
+
         bool anySolo = false;
         for (auto& t : tracks) if (t->solo) anySolo = true;
 
@@ -895,13 +973,37 @@ public:
                         mixClip (*c, b, lS, len1, n - len1);
                 }
 
-            if (isRec && t->writer != nullptr && in != nullptr && numIn > 0)
+            // Entrada de la tarjeta -> Input FX -> grabación (y monitor). Solo se procesa si hace falta.
+            if (! bus && t->armed.load() && in != nullptr && numIn > 0
+                && ((isRec && t->writer != nullptr) || t->monitor.load()))
             {
                 const int ch = jmin ((int) t->inputChannel.load(), numIn - 1);
                 if (in[ch] != nullptr)
                 {
-                    const float* data[1] = { in[ch] };
-                    t->writer->write (data, n);
+                    auto& ib = t->inBuf;
+                    ib.copyFrom (0, 0, in[ch], n);
+                    ib.copyFrom (1, 0, in[ch], n);
+
+                    if (! t->inputPlugins.empty())
+                    {
+                        for (auto& p : t->inputPlugins)
+                            processPlugin (*p, ib, n, false);
+
+                        ib.addFrom (0, 0, ib, 1, 0, n);      // vuelve a mono (promedio) para grabar la voz en 1 canal
+                        ib.applyGain (0, 0, n, 0.5f);
+                    }
+
+                    if (isRec && t->writer != nullptr)
+                    {
+                        const float* data[1] = { ib.getReadPointer (0) };
+                        t->writer->write (data, n);
+                    }
+
+                    if (t->monitor.load())                   // escuchar la voz (ya con efectos) por la pista
+                    {
+                        b.addFrom (0, 0, ib, 0, 0, n);
+                        b.addFrom (1, 0, ib, 0, 0, n);
+                    }
                 }
             }
 
@@ -993,12 +1095,28 @@ public:
             FloatVectorOperations::multiply (out[0], 0.5f, n);
         }
 
+        // Metrónomo: va directo a la salida (no pasa por los efectos del Master ni por el medidor)
+        if (clickOn)
+            for (int c = 0; c < jmin (2, numOut); ++c)
+                if (out[c] != nullptr)
+                    FloatVectorOperations::add (out[c], clickBuf.data(), n);
+
         for (int c = 0; c < jmin (2, numOut); ++c)
             if (out[c] != nullptr)
                 FloatVectorOperations::clip (out[c], out[c], -1.0f, 1.0f, n);
 
         masterPeakL = jmax (mix.getMagnitude (0, 0, n), masterPeakL.load() * 0.85f);
         masterPeakR = jmax (mix.getMagnitude (1, 0, n), masterPeakR.load() * 0.85f);
+
+        // RMS del Master (ventana de ~300 ms, como un medidor de mezcla)
+        {
+            const double coef = std::exp (-(double) n / (0.3 * sampleRate));
+            const double rl = mix.getRMSLevel (0, 0, n), rr = mix.getRMSLevel (1, 0, n);
+            rmsMsL = rmsMsL * coef + rl * rl * (1.0 - coef);
+            rmsMsR = rmsMsR * coef + rr * rr * (1.0 - coef);
+            masterRmsL = (float) std::sqrt (rmsMsL);
+            masterRmsR = (float) std::sqrt (rmsMsR);
+        }
 
         if (isPlaying)
         {
@@ -1021,6 +1139,9 @@ public:
     std::atomic<bool> playing { false }, recording { false };
     std::atomic<int64> position { 0 };
     std::atomic<float> masterGain { 1.0f }, masterPeakL { 0.0f }, masterPeakR { 0.0f };
+    std::atomic<float> masterRmsL { 0.0f }, masterRmsR { 0.0f };   // nivel RMS del Master (lineal)
+    std::atomic<bool> metronome { false };                         // clic al tempo mientras se reproduce o graba
+    std::atomic<float> metroVol { 0.5f };
 
     // Tempo, bucle y rejilla (la rejilla es solo de la interfaz, se guarda con el proyecto)
     std::atomic<double> bpm { 120.0 };
@@ -1033,6 +1154,43 @@ public:
     int maxBlock = 2048;
 
 private:
+    // Metrónomo (hilo de audio): escribe el clic de las muestras [pos, pos+len) en clickBuf desde dstOff.
+    // Un clic por tiempo (según el BPM); el primer tiempo de cada compás (4 tiempos) suena más agudo.
+    void renderMetronome (int64 pos, int dstOff, int len)
+    {
+        if (len <= 0) return;
+        const double beatLen = sampleRate * 60.0 / jmax (1.0, bpm.load());
+        int64 k = (int64) std::ceil ((double) pos / beatLen);
+        int64 trig = (int64) std::ceil ((double) k * beatLen);
+        const int clickLength = (int) (0.035 * sampleRate);
+        const float vol = metroVol.load();
+
+        for (int i = 0; i < len; ++i)
+        {
+            if (pos + i == trig)
+            {
+                clickN = 0;
+                clickFreq = (k % 4 == 0) ? 1600.0f : 1000.0f;
+                ++k;
+                trig = (int64) std::ceil ((double) k * beatLen);
+            }
+
+            float v = 0.0f;
+            if (clickN < clickLength)
+            {
+                const float env = 1.0f - (float) clickN / (float) clickLength;
+                v = std::sin (MathConstants<float>::twoPi * clickFreq * (float) clickN / (float) sampleRate) * env * env * vol;
+                ++clickN;
+            }
+            clickBuf[(size_t) (dstOff + i)] = v;
+        }
+    }
+
+    std::vector<float> clickBuf;            // clic del bloque actual
+    int clickN = 1 << 30;                   // muestras desde el inicio del clic (grande = no suena)
+    float clickFreq = 1000.0f;
+    double rmsMsL = 0.0, rmsMsR = 0.0;      // energía media suavizada del Master (hilo de audio)
+
     // Mezcla la parte del clip que cae entre 'pos' y 'pos + n' (posición en la línea de tiempo)
     // dentro del buffer 'b', empezando en la muestra 'dstOff' del buffer.
     static void mixClip (Clip& c, AudioBuffer<float>& b, int64 pos, int dstOff, int n)

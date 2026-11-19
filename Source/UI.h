@@ -14,6 +14,7 @@ namespace ui
     constexpr int laneH = 72;       // alto de un carril de automatización
     constexpr int masterH = 64;     // alto de la cabecera de la fila Master
     constexpr int addH = 70;        // alto del botón "+" al final de las pistas
+    constexpr int bottomH = 46;     // alto de la barra inferior (metrónomo y medidor RMS)
 
     enum Tool { toolSelect = 0, toolHand = 1, toolCut = 2 };
 
@@ -52,6 +53,7 @@ struct RowOwner
     virtual void setCursorFromX (int x) = 0;
     virtual void clipsChanged() = 0;
     virtual void showSendPanel (Track&, Component& source) = 0;
+    virtual void showInputFxMenu (Track&) = 0;          // efectos de entrada (se graban con la voz)
 
     virtual int getTool() const = 0;
     virtual void setTool (int) = 0;
@@ -435,8 +437,20 @@ public:
         btnAuto.onClick = [this] { owner.showEnvelopePanel (&track); };
         addAndMakeVisible (btnAuto);
 
+        btnInFx.setButtonText ("Input FX");
+        btnInFx.setTooltip (T ("Efectos de entrada: tu voz entra al DAW ya con estos efectos (se graban con ellos)"));
+        btnInFx.onClick = [this] { owner.showInputFxMenu (track); };
+        addAndMakeVisible (btnInFx);
+
+        setupToggle (btnMon, "Monitor", Colour (0xff2a7fd4));
+        btnMon.setToggleState (track.monitor.load(), dontSendNotification);
+        btnMon.setTooltip (T ("Escuchar tu voz con los Input FX mientras la pista está armada (usa audífonos para evitar acople)"));
+        btnMon.onClick = [this] { track.monitor = btnMon.getToggleState(); };
+
         if (track.isBus.load())   // un bus no graba ni tiene solo/envíos
         {
+            btnInFx.setVisible (false);
+            btnMon.setVisible (false);
             btnSolo.setVisible (false);
             btnArm.setVisible (false);
             inputBox.setVisible (false);
@@ -481,8 +495,10 @@ public:
         btnFx.setBounds (114, 30, 32, 24);
         btnDel.setBounds (150, 30, 32, 24);
         inputBox.setBounds (188, 30, 56, 24);
-        vol.setBounds (6, 58, 238, 18);
-        pan.setBounds (6, 76, 238, 18);
+        vol.setBounds (6, 58, track.isBus.load() ? 238 : 150, 18);
+        pan.setBounds (6, 76, track.isBus.load() ? 238 : 150, 18);
+        btnInFx.setBounds (160, 58, 84, 18);
+        btnMon.setBounds (160, 76, 84, 18);
     }
 
     void updateMeters()
@@ -492,6 +508,15 @@ public:
         {
             lastL = l; lastR = r;
             repaint (248, 0, 52, ui::rowH);
+        }
+
+        // "Input FX" se ilumina si la pista tiene efectos de entrada
+        const bool hasIn = ! track.inputPlugins.empty();
+        if (hasIn != lastHasInFx)
+        {
+            lastHasInFx = hasIn;
+            btnInFx.setColour (TextButton::buttonColourId, hasIn ? Colour (0xff2e9d4f) : getLookAndFeel().findColour (TextButton::buttonColourId));
+            btnInFx.setButtonText (hasIn ? "Input FX (" + String ((int) track.inputPlugins.size()) + ")" : String ("Input FX"));
         }
 
         // el texto de valor de los carriles sigue al cursor
@@ -873,7 +898,8 @@ private:
     RowOwner& owner;
 
     Label nameLabel;
-    TextButton btnMute, btnSolo, btnArm, btnFx, btnDel, btnSend, btnAuto;
+    TextButton btnMute, btnSolo, btnArm, btnFx, btnDel, btnSend, btnAuto, btnInFx, btnMon;
+    bool lastHasInFx = false;
     Slider vol, pan;
     ComboBox inputBox;
     EnvLanes lanes { eng, owner, *this, &track };
@@ -1444,6 +1470,147 @@ private:
     int64 lastPos = -1;
 };
 
+// ---------------------------------------------------------------------------
+// Barra inferior: metrónomo (botón + volumen del clic) y medidor RMS del Master (L / R)
+// ---------------------------------------------------------------------------
+class BottomBar : public Component
+{
+public:
+    explicit BottomBar (Engine& e) : eng (e)
+    {
+        btnMetro.setButtonText (T ("Metrónomo"));
+        btnMetro.setClickingTogglesState (true);
+        btnMetro.setColour (TextButton::buttonOnColourId, Colour (0xffd9a400));
+        btnMetro.setTooltip (T ("Clic al tempo (BPM) mientras se reproduce o graba. Tecla: M"));
+        btnMetro.setWantsKeyboardFocus (false);
+        btnMetro.onClick = [this] { eng.metronome = btnMetro.getToggleState(); };
+        addAndMakeVisible (btnMetro);
+
+        lblVol.setText (T ("Volumen clic"), dontSendNotification);
+        lblVol.setColour (Label::textColourId, Colours::grey);
+        lblVol.setFont (11.0f);
+        addAndMakeVisible (lblVol);
+
+        metroVol.setSliderStyle (Slider::LinearHorizontal);
+        metroVol.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
+        metroVol.setRange (0.0, 1.0, 0.01);
+        metroVol.setValue (eng.metroVol.load(), dontSendNotification);
+        metroVol.setScrollWheelEnabled (false);
+        metroVol.setWantsKeyboardFocus (false);
+        metroVol.onValueChange = [this] { eng.metroVol = (float) metroVol.getValue(); };
+        addAndMakeVisible (metroVol);
+    }
+
+    void toggleMetronome()
+    {
+        eng.metronome = ! eng.metronome.load();
+        btnMetro.setToggleState (eng.metronome.load(), dontSendNotification);
+    }
+
+    void syncState() { btnMetro.setToggleState (eng.metronome.load(), dontSendNotification); }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (8, 6);
+        btnMetro.setBounds (r.removeFromLeft (100));
+        r.removeFromLeft (10);
+        lblVol.setBounds (r.removeFromLeft (76));
+        metroVol.setBounds (r.removeFromLeft (110));
+        r.removeFromLeft (24);
+        meterArea = r;
+    }
+
+    // la barra se repinta solo si el medidor cambió de verdad
+    void updateMeters()
+    {
+        const float a = eng.masterRmsL.load(), b = eng.masterRmsR.load();
+        const float pa = eng.masterPeakL.load(), pb = eng.masterPeakR.load();
+        if (std::abs (a - lastA) > 0.0005f || std::abs (b - lastB) > 0.0005f
+            || std::abs (pa - lastPA) > 0.002f || std::abs (pb - lastPB) > 0.002f)
+        {
+            lastA = a; lastB = b; lastPA = pa; lastPB = pb;
+            repaint (meterArea.expanded (0, 6));
+        }
+    }
+
+    void paint (Graphics& g) override
+    {
+        g.fillAll (Colour (0xff1b1b1b));
+        g.setColour (Colours::black);
+        g.drawHorizontalLine (0, 0.0f, (float) getWidth());
+
+        if (meterArea.getWidth() < 200) return;
+
+        auto area = meterArea;
+        g.setColour (Colours::lightgrey);
+        g.setFont (Font (FontOptions (12.0f, Font::bold)));
+        g.drawText ("RMS", area.removeFromLeft (36), Justification::centredLeft);
+
+        const int rowH2 = area.getHeight() / 2;
+        drawRow (g, area.removeFromTop (rowH2).reduced (0, 1), "L", lastA, lastPA);
+        drawRow (g, area.reduced (0, 1), "R", lastB, lastPB);
+    }
+
+private:
+    static String dbText (float v, const String& suffix)
+    {
+        const float db = Decibels::gainToDecibels (v, -90.0f);
+        return (db <= -60.0f ? String ("-inf") : String (db, 1)) + suffix;
+    }
+
+    // Escala de -60 a 0 dBFS. Barra = RMS; marca blanca = pico.
+    void drawRow (Graphics& g, Rectangle<int> row, const String& label, float rms, float peak) const
+    {
+        g.setColour (Colours::lightgrey);
+        g.setFont (11.0f);
+        g.drawText (label, row.removeFromLeft (14), Justification::centred);
+
+        auto txt = row.removeFromRight (190);
+        auto bar = row.reduced (0, 1);
+
+        g.setColour (Colours::black);
+        g.fillRect (bar);
+
+        auto pos = [&] (float v)
+        {
+            const float db = Decibels::gainToDecibels (v, -60.0f);
+            return bar.getX() + (int) (jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f) * (float) bar.getWidth());
+        };
+
+        // zonas de color según el nivel
+        const int x = pos (rms);
+        const int xYellow = pos (Decibels::decibelsToGain (-18.0f));
+        const int xRed = pos (Decibels::decibelsToGain (-6.0f));
+        auto fill = [&] (int from, int to, Colour c)
+        {
+            if (to > from) { g.setColour (c); g.fillRect (from, bar.getY(), to - from, bar.getHeight()); }
+        };
+        fill (bar.getX(), jmin (x, xYellow), Colours::limegreen);
+        fill (xYellow, jmin (x, xRed), Colours::yellow);
+        fill (xRed, x, Colours::red);
+
+        // marcas de escala
+        g.setColour (Colours::white.withAlpha (0.18f));
+        for (int db : { -48, -36, -24, -12, -6 })
+            g.drawVerticalLine (pos (Decibels::decibelsToGain ((float) db)), (float) bar.getY(), (float) bar.getBottom());
+
+        g.setColour (Colours::white);
+        g.drawVerticalLine (jmin (bar.getRight() - 1, pos (peak)), (float) bar.getY(), (float) bar.getBottom());
+
+        g.setColour (Colours::lightgrey);
+        g.setFont (11.0f);
+        g.drawText (dbText (rms, " dB RMS") + "   " + dbText (peak, " pico"), txt.withTrimmedLeft (6),
+                    Justification::centredLeft, true);
+    }
+
+    Engine& eng;
+    TextButton btnMetro;
+    Label lblVol;
+    Slider metroVol;
+    Rectangle<int> meterArea;
+    float lastA = 0.0f, lastB = 0.0f, lastPA = 0.0f, lastPB = 0.0f;
+};
+
 class MainComponent : public Component, public RowOwner, private Timer
 {
 public:
@@ -1559,6 +1726,7 @@ public:
         viewport.setScrollBarsShown (true, true);
         viewport.setWantsKeyboardFocus (false);   // así Supr, Inicio, Ctrl+S llegan a esta ventana
         addAndMakeVisible (viewport);
+        addAndMakeVisible (bottomBar);
         addArea.onAdd = [this] (bool isBus) { addNewTrack (isBus); };
         content.addAndMakeVisible (addArea);
         content.addAndMakeVisible (masterRow);
@@ -1789,6 +1957,68 @@ public:
         });
     }
 
+    // Input FX: plugins que procesan la entrada de la tarjeta ANTES de grabar (ej. tu cadena de voz)
+    void showInputFxMenu (Track& t) override
+    {
+        PopupMenu m, add;
+        auto types = engine.host.list.getTypes();
+
+        std::map<String, PopupMenu> byVendor;
+        for (int i = 0; i < types.size(); ++i)
+            if (! types[i].isInstrument)
+                byVendor[types[i].manufacturerName].addItem (1000 + i, types[i].name);
+
+        for (auto& kv : byVendor)
+            add.addSubMenu (kv.first.isEmpty() ? String ("Otros") : kv.first, kv.second);
+        if (byVendor.empty())
+            add.addItem (1, T ("(primero pulsa 'Escanear plugins')"), false);
+
+        m.addSubMenu (T ("Añadir Input FX"), add);
+        m.addSeparator();
+        for (int i = 0; i < (int) t.inputPlugins.size(); ++i)
+            m.addItem (100 + i, T ("Abrir: ") + t.inputPlugins[(size_t) i]->getName());
+        for (int i = 0; i < (int) t.inputPlugins.size(); ++i)
+            m.addItem (200 + i, T ("Quitar: ") + t.inputPlugins[(size_t) i]->getName());
+        m.addSeparator();
+        m.addItem (2, T ("(la pista debe estar armada con R; activa Monitor para oírte)"), false);
+
+        SafePointer<MainComponent> sp (this);
+        Track* tp = &t;
+        m.showMenuAsync (PopupMenu::Options(), [sp, tp, types] (int r)
+        {
+            auto* self = sp.getComponent();
+            if (self == nullptr || r == 0 || ! self->engine.hasTrack (tp)) return;
+
+            if (r >= 1000)
+            {
+                String err;
+                auto inst = self->engine.host.create (types[r - 1000], self->engine.sampleRate, self->engine.maxBlock, err);
+                if (inst == nullptr)
+                {
+                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Plugin", "No se pudo cargar:\n" + err);
+                    return;
+                }
+                self->engine.addInputPlugin (*tp, std::move (inst));
+                self->openEditor (*tp->inputPlugins.back());
+            }
+            else if (r >= 200 && r < 300)
+            {
+                const int idx = r - 200;
+                if (idx < (int) tp->inputPlugins.size())
+                {
+                    self->closeWindowFor (tp->inputPlugins[(size_t) idx].get());
+                    self->engine.removeInputPlugin (*tp, idx);
+                }
+            }
+            else if (r >= 100 && r < 200)
+            {
+                const int idx = r - 100;
+                if (idx < (int) tp->inputPlugins.size())
+                    self->openEditor (*tp->inputPlugins[(size_t) idx]);
+            }
+        });
+    }
+
     // Menú del canal Master: añadir, abrir y quitar plugins (limitador, EQ de masterización...)
     void showMasterFxMenu()
     {
@@ -1907,6 +2137,7 @@ public:
             bar2.removeFromLeft (3);
         }
 
+        bottomBar.setBounds (r.removeFromBottom (ui::bottomH));
         viewport.setBounds (r);
         layoutContent();
     }
@@ -1949,6 +2180,13 @@ public:
             return true;
         }
 
+        // Ctrl+R = empezar a grabar (otra vez Ctrl+R = parar)
+        if ((mods.isCtrlDown() || mods.isCommandDown()) && (k.getKeyCode() == 'R' || k.getKeyCode() == 'r'))
+        {
+            doRecord();
+            return true;
+        }
+
         if (k == KeyPress::spaceKey)
         {
             if (engine.playing) doStop(); else engine.play();
@@ -1970,6 +2208,7 @@ public:
             if (ch == 'v') { setTool (ui::toolSelect); return true; }
             if (ch == 'h') { setTool (ui::toolHand);   return true; }
             if (ch == 'c') { setTool (ui::toolCut);    return true; }
+            if (ch == 'm') { bottomBar.toggleMetronome(); return true; }
         }
         return false;
     }
@@ -2168,6 +2407,7 @@ private:
 
         for (auto& r : rows) r->updateMeters();
         masterRow.updateCursor();
+        bottomBar.updateMeters();
 
         const int64 ls = engine.loopStart.load(), le = engine.loopEnd.load();
         const bool lo = engine.loopOn.load();
@@ -2374,6 +2614,8 @@ private:
     {
         for (auto& p : t.plugins)
             closeWindowFor (p.get());
+        for (auto& p : t.inputPlugins)
+            closeWindowFor (p.get());
     }
 
     // ----------------------------- Datos -----------------------------------
@@ -2389,6 +2631,7 @@ private:
     LoopOverlay loopOverlay { engine, [this] { return pxPerSec; } };
     Playhead playhead;
     Viewport viewport;
+    BottomBar bottomBar { engine };
 
     TextButton bHome, bPlay, bStop, bRec, bAdd, bAddBus, bImport, bZoomOut, bZoomIn, bAudio, bScan, bReport, bOpen, bSave;
     TextButton bSelect, bHand, bCut, bLoop, bMasterFx;
