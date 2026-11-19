@@ -54,6 +54,8 @@ struct RowOwner
     virtual void clipsChanged() = 0;
     virtual void showSendPanel (Track&, Component& source) = 0;
     virtual void showInputFxMenu (Track&) = 0;          // efectos de entrada (se graban con la voz)
+    virtual void timeSelectionChanged() = 0;            // la selección de tiempo cambió (repintar)
+    virtual void showRangeMenu (Track&) = 0;            // menú de la selección: exportar / traer audio de otro DAW
 
     virtual int getTool() const = 0;
     virtual void setTool (int) = 0;
@@ -647,6 +649,7 @@ public:
     {
         dragClip = nullptr;
         trimClip = nullptr;
+        rightDown = false;
         if (e.y >= ui::rowH) { lanes.mouseDown (e, ui::rowH); return; }   // zona de carriles
         if (e.x < ui::headerW) return;
 
@@ -676,8 +679,14 @@ public:
 
         if (e.mods.isPopupMenu())
         {
+            // Clic derecho: si solo haces clic se abre el menú (al soltar); si arrastras = selección de tiempo.
+            // Con Mayús (antes de arrastrar o al soltar) se abre el menú de la selección: exportar a otro DAW.
             if (c != nullptr) owner.setSelected (&track, c);
-            showContextMenu (c);
+            rightDown = true;
+            rightMoved = false;
+            rightShift = e.mods.isShiftDown();
+            rightClip = c;
+            rightStart = owner.snapSample (sampleAt (e.x));
             return;
         }
 
@@ -717,6 +726,19 @@ public:
 
     void mouseDrag (const MouseEvent& e) override
     {
+        if (rightDown)
+        {
+            if (e.getDistanceFromDragStart() > 4) rightMoved = true;
+            if (rightMoved)
+            {
+                const int64 here = owner.snapSample (sampleAt (e.x));
+                eng.selStart = jmin (rightStart, here);
+                eng.selEnd = jmax (rightStart, here);
+                owner.timeSelectionChanged();
+            }
+            return;
+        }
+
         if (lanes.mouseDrag (e, ui::rowH)) return;
 
         if (fadeClip != nullptr)
@@ -750,6 +772,24 @@ public:
 
     void mouseUp (const MouseEvent& e) override
     {
+        if (rightDown)
+        {
+            rightDown = false;
+            const bool shift = rightShift || e.mods.isShiftDown();
+            auto* c = ownsClip (rightClip) ? rightClip : nullptr;
+            rightClip = nullptr;
+
+            if (rightMoved)
+            {
+                if (shift) owner.showRangeMenu (track);               // Mayús + arrastrar con clic derecho
+            }
+            else if (shift && eng.selEnd.load() > eng.selStart.load())
+                owner.showRangeMenu (track);                          // Mayús + clic derecho con selección hecha
+            else
+                showContextMenu (c);                                  // clic derecho normal
+            return;
+        }
+
         lanes.mouseUp();
         fadeClip = nullptr;
 
@@ -908,6 +948,9 @@ private:
     static constexpr double fadeSecs[6] = { 0.0, 0.25, 0.5, 1.0, 2.0, 4.0 };
 
     Clip* dragClip = nullptr;
+    bool rightDown = false, rightMoved = false, rightShift = false;   // clic derecho en curso (selección de tiempo)
+    Clip* rightClip = nullptr;
+    int64 rightStart = 0;
     Clip* trimClip = nullptr;       // clip cuyo borde se está recortando
     bool trimIsLeft = true;
     int64 trimStart = 0, trimEnd = 0;
@@ -1045,6 +1088,43 @@ public:
         g.fillRect (x0, ui::rulerH - 6, x1 - x0, 6);
         g.drawVerticalLine (x0, 0.0f, (float) getHeight());
         g.drawVerticalLine (x1, 0.0f, (float) getHeight());
+    }
+
+private:
+    Engine& eng;
+    std::function<double()> pps;
+};
+
+// Selección de tiempo (clic derecho + arrastrar): banda azul sobre todas las pistas y su duración en la regla
+class SelectionOverlay : public Component
+{
+public:
+    SelectionOverlay (Engine& e, std::function<double()> p) : eng (e), pps (std::move (p))
+    {
+        setInterceptsMouseClicks (false, false);
+    }
+
+    void paint (Graphics& g) override
+    {
+        const int64 s = eng.selStart.load(), en = eng.selEnd.load();
+        if (en <= s) return;
+
+        const double p = pps();
+        const int x0 = ui::headerW + (int) ((double) s / eng.sampleRate * p);
+        const int x1 = ui::headerW + (int) ((double) en / eng.sampleRate * p);
+        const Colour col (0xff3aa0ff);
+
+        g.setColour (col.withAlpha (0.16f));
+        g.fillRect (x0, 0, x1 - x0, getHeight());
+        g.setColour (col.withAlpha (0.9f));
+        g.fillRect (x0, ui::rulerH - 6, x1 - x0, 6);
+        g.drawVerticalLine (x0, 0.0f, (float) getHeight());
+        g.drawVerticalLine (x1, 0.0f, (float) getHeight());
+
+        const double secs = (double) (en - s) / eng.sampleRate;
+        g.setColour (Colours::white);
+        g.setFont (11.0f);
+        g.drawText (String (secs, 2) + " s", x0 + 4, 2, 90, 14, Justification::left);
     }
 
 private:
@@ -1730,6 +1810,7 @@ public:
         addArea.onAdd = [this] (bool isBus) { addNewTrack (isBus); };
         content.addAndMakeVisible (addArea);
         content.addAndMakeVisible (masterRow);
+        content.addAndMakeVisible (selOverlay);
         content.addAndMakeVisible (loopOverlay);
         content.addAndMakeVisible (playhead);
 
@@ -1953,6 +2034,80 @@ public:
                 const int idx = r - 100;
                 if (idx < (int) tp->plugins.size())
                     self->openEditor (*tp->plugins[(size_t) idx]);
+            }
+        });
+    }
+
+    void timeSelectionChanged() override { selOverlay.repaint(); }
+
+    // Menú de la selección de tiempo: sacar el audio a otro DAW y traerlo de vuelta al proyecto
+    void showRangeMenu (Track& t) override
+    {
+        const int64 a = engine.selStart.load(), b = engine.selEnd.load();
+        if (b <= a) return;
+
+        PopupMenu m;
+        m.addSectionHeader (T ("Selección: ") + String ((double) (b - a) / engine.sampleRate, 2) + " s");
+        m.addItem (1, T ("Exportar esta pista (selección) a WAV para otro DAW"), ! t.isBus.load());
+        m.addItem (2, T ("Exportar todas las pistas (selección) en un solo WAV"));
+        m.addSeparator();
+        m.addItem (3, T ("Traer audio trabajado en otro DAW (a esta pista, al inicio de la selección)..."), ! t.isBus.load());
+        m.addItem (4, T ("Abrir carpeta de exportados"));
+        m.addSeparator();
+        m.addItem (5, T ("Quitar selección"));
+
+        SafePointer<MainComponent> sp (this);
+        Track* tp = &t;
+        m.showMenuAsync (PopupMenu::Options(), [sp, tp, a, b] (int r)
+        {
+            auto* self = sp.getComponent();
+            if (self == nullptr || r == 0 || ! self->engine.hasTrack (tp)) return;
+
+            if (r == 1 || r == 2)
+            {
+                String err;
+                const auto f = self->engine.exportRange (r == 1 ? tp : nullptr, a, b, r == 1 ? tp->name : String ("Mezcla"), err);
+                if (f == File())
+                {
+                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, T ("Exportar"), err);
+                    return;
+                }
+                self->statusLabel.setText (T ("Exportado: ") + f.getFullPathName(), dontSendNotification);
+                self->statusTicks = 400;
+                f.revealToUser();                 // abre la carpeta con el archivo ya marcado
+            }
+            else if (r == 3)
+            {
+                self->chooser = std::make_unique<FileChooser> (T ("Audio trabajado en otro DAW"), self->engine.exportDir(),
+                                                               self->engine.formats.getWildcardForAllFormats());
+                self->chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                                            [sp, tp, a] (const FileChooser& fc)
+                {
+                    auto* s2 = sp.getComponent();
+                    const auto f = fc.getResult();
+                    if (s2 == nullptr || ! s2->engine.hasTrack (tp) || ! f.existsAsFile()) return;
+
+                    auto clip = s2->engine.loadClip (f);
+                    if (clip == nullptr)
+                    {
+                        AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Audio",
+                            T ("No se pudo cargar: ") + f.getFileName());
+                        return;
+                    }
+                    clip->startSample = a;                 // vuelve justo donde estaba la selección
+                    s2->engine.addClip (*tp, std::move (clip));
+                    s2->layoutContent();
+                    s2->repaintRows();
+                });
+            }
+            else if (r == 4)
+            {
+                self->engine.exportDir().revealToUser();
+            }
+            else if (r == 5)
+            {
+                self->engine.selEnd = self->engine.selStart.load();
+                self->selOverlay.repaint();
             }
         });
     }
@@ -2194,6 +2349,14 @@ public:
         }
         if (k == KeyPress::homeKey) { engine.position = 0; return true; }
 
+        // Esc = quitar la selección de tiempo
+        if (k == KeyPress::escapeKey && engine.selEnd.load() > engine.selStart.load())
+        {
+            engine.selEnd = engine.selStart.load();
+            selOverlay.repaint();
+            return true;
+        }
+
         // Supr (o Retroceso) = borrar el audio seleccionado
         if (k == KeyPress::deleteKey || k == KeyPress::backspaceKey)
         {
@@ -2260,6 +2423,7 @@ private:
         y += ui::addH;
         masterRow.setBounds (0, y, cw, masterRow.desiredHeight());
 
+        selOverlay.setBounds (content.getLocalBounds());
         loopOverlay.setBounds (content.getLocalBounds());
         loopOverlay.toFront (false);
         playhead.toFront (false);
@@ -2628,6 +2792,7 @@ private:
     TimelineContent content;
     AddTrackArea addArea;
     MasterRow masterRow { engine, *this };
+    SelectionOverlay selOverlay { engine, [this] { return pxPerSec; } };
     LoopOverlay loopOverlay { engine, [this] { return pxPerSec; } };
     Playhead playhead;
     Viewport viewport;

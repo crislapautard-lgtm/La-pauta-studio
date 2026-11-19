@@ -316,6 +316,63 @@ public:
         return result;
     }
 
+    // ------------------- Exportar un tramo (para trabajarlo en otro DAW) -------------------
+    File exportDir() const
+    {
+        auto d = File::getSpecialLocation (File::userDocumentsDirectory)
+                     .getChildFile ("La Pauta Studio").getChildFile ("Exportados");
+        d.createDirectory();
+        return d;
+    }
+
+    // Escribe en un WAV el audio de los clips entre s0 y s1 (muestras de la línea de tiempo).
+    // 'only' = una sola pista; nullptr = suma de todas las pistas no silenciadas. Va sin efectos ni fader.
+    // Devuelve el archivo, o File() con el motivo en 'err'.
+    File exportRange (Track* only, int64 s0, int64 s1, const String& baseName, String& err)
+    {
+        if (s1 <= s0) { err = "La selección está vacía"; return {}; }
+
+        auto used = [&] (const Track& t)
+        {
+            if (t.isBus.load()) return false;
+            if (only != nullptr) return &t == only;
+            return ! t.mute.load();
+        };
+
+        bool any = false;
+        for (auto& t : tracks)
+            if (used (*t))
+                for (auto& c : t->clips)
+                    if (c->startSample.load() < s1 && c->startSample.load() + c->audio.getNumSamples() > s0)
+                        any = true;
+        if (! any) { err = "No hay audio dentro de la selección"; return {}; }
+
+        auto file = exportDir().getNonexistentChildFile (File::createLegalFileName (baseName) + "_"
+                                                          + Time::getCurrentTime().formatted ("%H%M%S"), ".wav");
+        std::unique_ptr<FileOutputStream> fos (file.createOutputStream());
+        if (fos == nullptr) { err = "No se pudo crear el archivo en " + file.getParentDirectory().getFullPathName(); return {}; }
+
+        WavAudioFormat wav;
+        std::unique_ptr<AudioFormatWriter> w (wav.createWriterFor (fos.get(), sampleRate, 2, only != nullptr ? 24 : 32, {}, 0));
+        if (w == nullptr) { err = "No se pudo preparar el archivo WAV"; return {}; }
+        fos.release();   // el writer es dueño del stream
+
+        constexpr int chunk = 8192;
+        AudioBuffer<float> tmp (2, chunk);
+        for (int64 p = s0; p < s1; p += chunk)
+        {
+            const int n = (int) jmin<int64> (chunk, s1 - p);
+            tmp.clear();
+            for (auto& t : tracks)
+                if (used (*t))
+                    for (auto& c : t->clips)
+                        mixClip (*c, tmp, p, 0, n);
+            w->writeFromAudioSampleBuffer (tmp, 0, n);
+        }
+        w.reset();   // cierra el archivo
+        return file;
+    }
+
     // Pasa un clip de una pista a otra (misma posición en el tiempo)
     void moveClip (Track& from, Track& to, Clip* c)
     {
@@ -1145,6 +1202,7 @@ public:
 
     // Tempo, bucle y rejilla (la rejilla es solo de la interfaz, se guarda con el proyecto)
     std::atomic<double> bpm { 120.0 };
+    std::atomic<int64> selStart { 0 }, selEnd { 0 };  // selección de tiempo (selEnd <= selStart = no hay)
     std::atomic<bool> loopOn { false };
     std::atomic<int64> loopStart { 0 }, loopEnd { 0 };
     int gridId = 4;                                   // 4 = 1/4 (ver la lista de rejillas en UI.h)
