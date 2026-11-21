@@ -281,12 +281,21 @@ public:
         {
             if (e.mods.isPopupMenu())  showMenu (env, -1);
             else if (e.x >= 248)       { env->visible = false; owner.clipsChanged(); }
-            else if (e.x >= 202)       { env->active = ! env->active.load(); comp.repaint(); }
+            else if (e.x >= 202)
+            {
+                eng.undoBegin();
+                env->active = ! env->active.load();
+                eng.undoEnd();
+                comp.repaint();
+            }
             return true;
         }
 
         int idx = pointAt (*env, top, e.x, e.y);
         if (e.mods.isPopupMenu()) { showMenu (env, idx); return true; }
+
+        eng.undoBegin();                                        // Ctrl+Z deshace el punto nuevo / el movimiento
+        undoOpen = true;
 
         if (idx < 0)                                            // clic en vacío = punto nuevo
         {
@@ -318,6 +327,11 @@ public:
 
     void mouseUp()
     {
+        if (undoOpen)
+        {
+            undoOpen = false;
+            eng.undoEnd();               // un clic que no cambió nada no deja paso
+        }
         if (dragEnv == nullptr) return;
         dragEnv = nullptr;
         dragIdx = -1;
@@ -369,6 +383,7 @@ private:
         {
             if (sp.getComponent() == nullptr || r == 0 || ! exists (env)) return;
 
+            if (r != 4) eng.undoBegin();
             if (r == 1)      eng.envRemovePoint (*env, pointIdx);
             else if (r == 2) eng.envClear (*env);
             else if (r == 3) env->active = ! env->active.load();
@@ -383,6 +398,7 @@ private:
     Component& comp;
     Track* target;
 
+    bool undoOpen = false;
     Envelope* dragEnv = nullptr;
     int dragIdx = -1;
     int dragTop = 0;
@@ -671,6 +687,7 @@ public:
             {
                 // si ambos tiradores coinciden (sin fades), manda el más cercano al borde pulsado
                 fadeIsOut = nearOut && (! nearIn || std::abs (e.x - x1) < std::abs (e.x - x0));
+                eng.undoBegin();                       // Ctrl+Z deshace el fade
                 fadeClip = c;
                 owner.setSelected (&track, c);
                 return;
@@ -706,6 +723,7 @@ public:
         bool edgeLeft = false;
         if (c != nullptr && e.y > 14 && edgeHit (*c, e.x, edgeLeft))
         {
+            eng.undoBegin();
             trimClip = c;
             trimIsLeft = edgeLeft;
             trimStart = c->startSample.load();
@@ -715,6 +733,7 @@ public:
 
         if (c != nullptr && tool == ui::toolHand)
         {
+            eng.undoBegin();
             dragClip = c;
             dragOrigStart = c->startSample.load();
         }
@@ -791,7 +810,12 @@ public:
         }
 
         lanes.mouseUp();
-        fadeClip = nullptr;
+
+        if (fadeClip != nullptr)
+        {
+            fadeClip = nullptr;
+            eng.undoEnd();               // si el fade no cambió, no queda paso de deshacer
+        }
 
         if (trimClip != nullptr)
         {
@@ -802,6 +826,7 @@ public:
                 auto* nc = eng.trimClip (track, tc, trimStart, trimEnd);
                 owner.setSelected (&track, nc);
             }
+            eng.undoEnd();
             owner.clipsChanged();
             return;
         }
@@ -817,6 +842,7 @@ public:
                     eng.moveClip (track, *dst, moved);
                     owner.setSelected (dst, moved);
                 }
+            eng.undoEnd();               // un clic sin mover no deja paso de deshacer
             owner.clipsChanged();
         }
     }
@@ -907,6 +933,7 @@ private:
             if ((r >= 30 && r < 36) || (r >= 40 && r < 46))
             {
                 const bool out = r < 40;
+                self->eng.undoBegin();
                 const int n = jmin (c->audio.getNumSamples(), (int) (fadeSecs[r - (out ? 30 : 40)] * self->eng.sampleRate));
                 (out ? c->fadeOutSamples : c->fadeInSamples) = n;
                 self->repaint();
@@ -2335,6 +2362,22 @@ public:
             return true;
         }
 
+        // Ctrl+Z = deshacer; Ctrl+Y o Ctrl+Mayús+Z = rehacer
+        if (mods.isCtrlDown() || mods.isCommandDown())
+        {
+            const int code = k.getKeyCode();
+            if (code == 'Z' || code == 'z')
+            {
+                if (mods.isShiftDown()) doRedo(); else doUndo();
+                return true;
+            }
+            if (code == 'Y' || code == 'y')
+            {
+                doRedo();
+                return true;
+            }
+        }
+
         // Ctrl+R = empezar a grabar (otra vez Ctrl+R = parar)
         if ((mods.isCtrlDown() || mods.isCommandDown()) && (k.getKeyCode() == 'R' || k.getKeyCode() == 'r'))
         {
@@ -2487,6 +2530,28 @@ private:
                 if (c.get() == selClip) return;
         selTrack = nullptr;
         selClip = nullptr;
+    }
+
+    void doUndo()
+    {
+        if (engine.recording) { setStatus (T ("No se puede deshacer mientras graba")); return; }
+        if (engine.undo()) { afterUndoRedo(); setStatus (T ("Deshecho")); }
+        else setStatus (T ("No hay nada que deshacer"));
+    }
+
+    void doRedo()
+    {
+        if (engine.recording) { setStatus (T ("No se puede rehacer mientras graba")); return; }
+        if (engine.redo()) { afterUndoRedo(); setStatus (T ("Rehecho")); }
+        else setStatus (T ("No hay nada que rehacer"));
+    }
+
+    void afterUndoRedo()
+    {
+        validateSelection();
+        layoutContent();         // cambian los clips y los carriles visibles
+        repaintRows();
+        selOverlay.repaint();
     }
 
     void deleteSelectedClip()

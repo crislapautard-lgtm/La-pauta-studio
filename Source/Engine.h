@@ -171,6 +171,7 @@ public:
 
     void removeTrack (Track* t)
     {
+        clearUndo();      // los pasos guardados apuntan a clips y automatizaciones de esta pista
         std::unique_ptr<Track> dead;
         {
             const SpinLock::ScopedLockType sl (lock);
@@ -313,9 +314,222 @@ public:
                     break;
                 }
         }
+        retire (std::move (dead));
         return result;
     }
 
+    // ------------------------- Deshacer / Rehacer (Ctrl+Z / Ctrl+Y) -------------------------
+    // Cada acción guarda una "foto" del arreglo antes de cambiarlo: qué clips hay en cada pista (con posición y
+    // fades) y los puntos de las automatizaciones. Los clips borrados o reemplazados (dividir, recortar) no se
+    // destruyen: esperan en el "cementerio" mientras haya un paso de deshacer que los necesite.
+    // No cubre: fader/pan/mute/solo, añadir o quitar pistas ni plugins (quitar una pista o un plugin borra el historial).
+    // Todo esto corre solo en el hilo de la interfaz.
+    struct ClipState  { Clip* clip; int64 start; int fadeIn; int fadeOut; };
+    struct EnvState   { Envelope* env; std::vector<EnvPoint> points; bool active; bool visible; };
+    struct TrackState { Track* track; std::vector<ClipState> clips; std::vector<EnvState> envs; };   // track == nullptr = Master
+    using Snapshot = std::vector<TrackState>;
+
+    // Empieza una acción deshacible (llamar ANTES de cambiar algo). Si es un gesto con arrastre, termina con undoEnd().
+    void undoBegin()
+    {
+        if (undoSuspend > 0) return;
+        pendingRedo = std::move (redoStack);
+        redoStack.clear();
+        undoStack.push_back (captureState());
+        if (undoStack.size() > 100) undoStack.erase (undoStack.begin());
+        purgeGraveyard();
+    }
+
+    // Fin de un gesto: si no cambió nada (un clic sin mover), se descarta el paso y se conserva el rehacer.
+    void undoEnd()
+    {
+        if (! undoStack.empty() && sameState (undoStack.back(), captureState()))
+        {
+            undoStack.pop_back();
+            if (! pendingRedo.empty()) redoStack = std::move (pendingRedo);
+        }
+        pendingRedo.clear();
+    }
+
+    bool undo()
+    {
+        if (undoStack.empty() || recording.load()) return false;
+        redoStack.push_back (captureState());
+        auto s = std::move (undoStack.back());
+        undoStack.pop_back();
+        applyState (s);
+        purgeGraveyard();
+        return true;
+    }
+
+    bool redo()
+    {
+        if (redoStack.empty() || recording.load()) return false;
+        undoStack.push_back (captureState());
+        auto s = std::move (redoStack.back());
+        redoStack.pop_back();
+        applyState (s);
+        purgeGraveyard();
+        return true;
+    }
+
+    void clearUndo()
+    {
+        undoStack.clear();
+        redoStack.clear();
+        pendingRedo.clear();
+        graveyard.clear();
+    }
+
+    int undoSuspend = 0;   // > 0 mientras se carga un proyecto (no guardar pasos)
+
+private:
+    std::vector<Snapshot> undoStack, redoStack, pendingRedo;
+    std::vector<std::unique_ptr<Clip>> graveyard;
+
+    static void captureEnvs (std::vector<EnvState>& out, const EnvList& list)
+    {
+        for (auto& e : list)
+            out.push_back ({ e.get(), e->points, e->active.load(), e->visible });
+    }
+
+    Snapshot captureState() const
+    {
+        Snapshot s;
+        for (auto& t : tracks)
+        {
+            TrackState ts;
+            ts.track = t.get();
+            for (auto& c : t->clips)
+                ts.clips.push_back ({ c.get(), c->startSample.load(), c->fadeInSamples.load(), c->fadeOutSamples.load() });
+            captureEnvs (ts.envs, t->envs);
+            s.push_back (std::move (ts));
+        }
+        TrackState ms;
+        ms.track = nullptr;
+        captureEnvs (ms.envs, masterEnvs);
+        s.push_back (std::move (ms));
+        return s;
+    }
+
+    static bool sameState (const Snapshot& a, const Snapshot& b)
+    {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+        {
+            auto& x = a[i];
+            auto& y = b[i];
+            if (x.track != y.track || x.clips.size() != y.clips.size() || x.envs.size() != y.envs.size()) return false;
+
+            for (size_t k = 0; k < x.clips.size(); ++k)
+            {
+                auto& p = x.clips[k];
+                auto& q = y.clips[k];
+                if (p.clip != q.clip || p.start != q.start || p.fadeIn != q.fadeIn || p.fadeOut != q.fadeOut) return false;
+            }
+            for (size_t k = 0; k < x.envs.size(); ++k)
+            {
+                auto& p = x.envs[k];
+                auto& q = y.envs[k];
+                if (p.env != q.env || p.active != q.active || p.points.size() != q.points.size())
+                    return false;
+                for (size_t j = 0; j < p.points.size(); ++j)
+                    if (p.points[j].sample != q.points[j].sample || p.points[j].value != q.points[j].value) return false;
+            }
+        }
+        return true;
+    }
+
+    void applyState (const Snapshot& s)
+    {
+        const SpinLock::ScopedLockType sl (lock);
+
+        // 1) se sacan los clips de las pistas de la foto; 2) se devuelven en el orden y posición de la foto;
+        // 3) los que sobran (no estaban en la foto) van al cementerio
+        std::vector<std::unique_ptr<Clip>> pool;
+        for (auto& ts : s)
+            if (ts.track != nullptr && hasTrack (ts.track))
+            {
+                for (auto& c : ts.track->clips) pool.push_back (std::move (c));
+                ts.track->clips.clear();
+            }
+
+        auto takeFrom = [] (std::vector<std::unique_ptr<Clip>>& v, Clip* p) -> std::unique_ptr<Clip>
+        {
+            for (size_t i = 0; i < v.size(); ++i)
+                if (v[i].get() == p)
+                {
+                    auto r = std::move (v[i]);
+                    v.erase (v.begin() + (long) i);
+                    return r;
+                }
+            return nullptr;
+        };
+
+        for (auto& ts : s)
+        {
+            if (ts.track == nullptr || ! hasTrack (ts.track)) continue;
+            for (auto& cs : ts.clips)
+            {
+                auto c = takeFrom (pool, cs.clip);
+                if (c == nullptr) c = takeFrom (graveyard, cs.clip);
+                for (size_t i = 0; c == nullptr && i < tracks.size(); ++i)      // por si quedó en otra pista
+                    c = takeFrom (tracks[i]->clips, cs.clip);
+                if (c == nullptr) continue;
+
+                c->startSample = cs.start;
+                c->fadeInSamples = cs.fadeIn;
+                c->fadeOutSamples = cs.fadeOut;
+                ts.track->clips.push_back (std::move (c));
+            }
+        }
+        for (auto& c : pool) graveyard.push_back (std::move (c));
+
+        auto restoreEnvs = [] (const std::vector<EnvState>& states, EnvList& list)
+        {
+            for (auto& es : states)
+                for (auto& e : list)
+                    if (e.get() == es.env)
+                    {
+                        e->points = es.points;
+                        e->active = es.active;               // (visible es solo de pantalla: no se deshace)
+                        e->lastApplied = -1.0f;      // fuerza a reenviar el valor al plugin
+                        break;
+                    }
+        };
+        for (auto& ts : s)
+        {
+            if (ts.track == nullptr)            restoreEnvs (ts.envs, masterEnvs);
+            else if (hasTrack (ts.track))       restoreEnvs (ts.envs, ts.track->envs);
+        }
+    }
+
+    // Libera los clips del cementerio que ningún paso de deshacer/rehacer necesita ya
+    void purgeGraveyard()
+    {
+        if (graveyard.empty()) return;
+
+        std::vector<const Clip*> keep;
+        for (auto* st : { &undoStack, &redoStack, &pendingRedo })
+            for (auto& snap : *st)
+                for (auto& ts : snap)
+                    for (auto& cs : ts.clips)
+                        keep.push_back (cs.clip);
+
+        for (size_t i = graveyard.size(); i-- > 0;)
+            if (std::find (keep.begin(), keep.end(), graveyard[i].get()) == keep.end())
+                graveyard.erase (graveyard.begin() + (long) i);
+    }
+
+    // Un clip que sale de una pista (borrado, dividido, recortado) espera en el cementerio
+    void retire (std::unique_ptr<Clip> c)
+    {
+        if (c == nullptr) return;
+        graveyard.push_back (std::move (c));
+        purgeGraveyard();
+    }
+
+public:
     // ------------------- Exportar un tramo (para trabajarlo en otro DAW) -------------------
     File exportDir() const
     {
@@ -389,12 +603,14 @@ public:
 
     void addClip (Track& t, std::unique_ptr<Clip> c)
     {
+        undoBegin();
         const SpinLock::ScopedLockType sl (lock);
         t.clips.push_back (std::move (c));
     }
 
     void removeClip (Track& t, Clip* c)
     {
+        undoBegin();
         std::unique_ptr<Clip> dead;
         {
             const SpinLock::ScopedLockType sl (lock);
@@ -406,6 +622,7 @@ public:
                     break;
                 }
         }
+        retire (std::move (dead));
     }
 
     void splitClip (Track& t, Clip* c, int64 at)
@@ -414,6 +631,7 @@ public:
         const int64 rel = at - s;
         const int total = c->audio.getNumSamples();
         if (rel <= 0 || rel >= total) return;
+        undoBegin();
 
         AudioBuffer<float> a (2, (int) rel), b (2, total - (int) rel);
         for (int ch = 0; ch < 2; ++ch)
@@ -441,6 +659,7 @@ public:
             t.clips.push_back (std::move (ca));
             t.clips.push_back (std::move (cb));
         }
+        retire (std::move (dead));
     }
 
     // ----------------------------- Plugins ---------------------------------
@@ -454,6 +673,7 @@ public:
 
     void removePlugin (Track& t, int index)
     {
+        clearUndo();      // quitar un plugin borra sus automatizaciones
         std::unique_ptr<AudioPluginInstance> dead;
         {
             const SpinLock::ScopedLockType sl (lock);
@@ -497,6 +717,7 @@ public:
 
     void removeMasterPlugin (int index)
     {
+        clearUndo();
         std::unique_ptr<AudioPluginInstance> dead;
         {
             const SpinLock::ScopedLockType sl (lock);
@@ -789,6 +1010,15 @@ public:
         }
 
         playing = false;
+
+        clearUndo();                       // proyecto nuevo = historial nuevo
+        struct UndoOff                     // mientras carga no se guardan pasos; al terminar se limpia
+        {
+            Engine& e;
+            explicit UndoOff (Engine& x) : e (x) { ++e.undoSuspend; }
+            ~UndoOff() { --e.undoSuspend; e.clearUndo(); }
+        } undoOff { *this };
+
         {
             std::vector<std::unique_ptr<Track>> old;
             {
