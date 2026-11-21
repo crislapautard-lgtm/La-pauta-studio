@@ -831,16 +831,32 @@ public:
     }
 
     // ----------------------------- Transporte ------------------------------
-    void play()  { playing = true; }
-    void pause() { playing = false; }
+    // Posición de inicio: el punto donde el usuario puso el cursor estando detenido. Al parar (o al llegar
+    // al final) el cursor siempre vuelve aquí.
+    void play()
+    {
+        if (playing.load()) return;
+        position = startPos.load();
+        playing = true;
+    }
 
-    // Devuelve true si se grabó algo (para que la UI se refresque).
+    // El usuario mueve el cursor. Si está detenido, ese punto pasa a ser la nueva posición de inicio;
+    // si está sonando, solo salta (la posición de inicio no cambia).
+    void setCursor (int64 s)
+    {
+        s = jmax<int64> (0, s);
+        position = s;
+        if (! playing.load())
+            startPos = s;
+    }
+
+    // Detiene y devuelve el cursor a la posición de inicio. Devuelve true si se grabó algo (para refrescar la UI).
     bool stop()
     {
         playing = false;
-        if (recording.load())
-            return stopRecording();
-        return false;
+        const bool recorded = recording.load() ? stopRecording() : false;
+        position = startPos.load();
+        return recorded;
     }
 
     bool anyArmed() const
@@ -1045,6 +1061,7 @@ public:
         loopEnd = xml->getStringAttribute ("loopEnd").getLargeIntValue();
         loopOn = xml->getBoolAttribute ("loopOn", false);
         position = 0;
+        startPos = 0;
         int missing = 0;
 
         std::vector<const XmlElement*> trackXml;
@@ -1407,9 +1424,30 @@ public:
 
         if (isPlaying)
         {
+            const int64 next = useLoop ? lS + (n - len1) : pos + n;
+
+            // Fin de la canción: pasado el último clip (+1 s de cola para reverbs) se detiene y el cursor
+            // vuelve a la posición de inicio. No aplica al grabar ni dentro de un bucle activo.
+            bool finished = false;
+            if (! isRec && ! useLoop && ! (loopOn.load() && pos < lE))
+            {
+                int64 endSample = 0;
+                for (auto& t : tracks)
+                    if (! t->isBus.load())
+                        for (auto& c : t->clips)
+                            endSample = jmax (endSample, c->startSample.load() + (int64) c->audio.getNumSamples());
+                finished = endSample > 0 && next >= endSample + (int64) sampleRate;
+            }
+
             // Si la interfaz movió el cursor durante este bloque, se respeta el cursor nuevo.
             int64 expected = pos;
-            position.compare_exchange_strong (expected, useLoop ? lS + (n - len1) : pos + n);
+            if (finished)
+            {
+                if (position.compare_exchange_strong (expected, startPos.load()))
+                    playing = false;
+            }
+            else
+                position.compare_exchange_strong (expected, next);
         }
     }
 
@@ -1425,6 +1463,7 @@ public:
     EnvList masterEnvs;                                                // automatización del Master
     std::atomic<bool> playing { false }, recording { false };
     std::atomic<int64> position { 0 };
+    std::atomic<int64> startPos { 0 };                // posición de inicio: a donde vuelve el cursor al parar
     std::atomic<float> masterGain { 1.0f }, masterPeakL { 0.0f }, masterPeakR { 0.0f };
     std::atomic<float> masterRmsL { 0.0f }, masterRmsR { 0.0f };   // nivel RMS del Master (lineal)
     std::atomic<bool> metronome { false };                         // clic al tempo mientras se reproduce o graba

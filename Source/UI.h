@@ -1718,7 +1718,84 @@ private:
     float lastA = 0.0f, lastB = 0.0f, lastPA = 0.0f, lastPB = 0.0f;
 };
 
-class MainComponent : public Component, public RowOwner, private Timer
+// ---------------------------------------------------------------------------
+// Indicador visual mientras se arrastran archivos de audio sobre la ventana: marco azul, una pista "fantasma"
+// por archivo al final de las pistas (con el ancho real del audio) y una línea en la posición de inicio.
+// ---------------------------------------------------------------------------
+class DropOverlay : public Component
+{
+public:
+    struct Item { String name; double seconds = 0.0; };
+
+    DropOverlay() { setInterceptsMouseClicks (false, false); setVisible (false); }
+
+    void setInfo (std::vector<Item> i, int ghostTopY, int startXpos, double pixelsPerSec, int headerXpos)
+    {
+        items = std::move (i);
+        ghostTop = ghostTopY;
+        startX = startXpos;
+        pps = pixelsPerSec;
+        headerX = headerXpos;
+        repaint();
+    }
+
+    void paint (Graphics& g) override
+    {
+        const Colour blue (0xff3aa0ff);
+        g.setColour (blue.withAlpha (0.07f));
+        g.fillAll();
+        g.setColour (blue.withAlpha (0.9f));
+        g.drawRect (getLocalBounds(), 3);
+
+        const int n = jmin ((int) items.size(), 8);
+        if (n == 0) return;
+
+        // las pistas fantasma se pegan al final de las pistas; si quedan fuera de la vista, al borde inferior
+        const int top = jlimit (0, jmax (0, getHeight() - n * ui::rowH), ghostTop);
+
+        g.setColour (blue.withAlpha (0.8f));
+        g.drawVerticalLine (jlimit (0, getWidth() - 1, startX), 0.0f, (float) getHeight());
+
+        for (int k = 0; k < n; ++k)
+        {
+            const int y = top + k * ui::rowH;
+            const auto& it = items[(size_t) k];
+
+            g.setColour (blue.withAlpha (0.22f));
+            g.fillRect (headerX, y, ui::headerW, ui::rowH);
+            g.fillRect (jmax (0, headerX + ui::headerW), y, getWidth(), ui::rowH);
+
+            g.setColour (Colours::white);
+            g.setFont (Font (FontOptions (13.0f, Font::bold)));
+            g.drawText (T ("+ Pista nueva"), headerX + 10, y + 10, ui::headerW - 20, 18, Justification::left);
+            g.setFont (12.0f);
+            g.drawText (it.name, headerX + 10, y + 30, ui::headerW - 20, 16, Justification::left, true);
+
+            const int w = jmax (30, (int) (it.seconds * pps));
+            Rectangle<int> r (startX, y + 4, w, ui::rowH - 8);
+            g.setColour (blue.withAlpha (0.35f));
+            g.fillRect (r);
+            g.setColour (blue);
+            g.drawRect (r, 2);
+            g.setColour (Colours::white);
+            g.setFont (12.0f);
+            g.drawText (it.name, r.reduced (6, 2).withHeight (16), Justification::left, true);
+        }
+
+        g.setColour (Colours::white);
+        g.setFont (Font (FontOptions (15.0f, Font::bold)));
+        const String msg = items.size() == 1 ? T ("Suelta para crear una pista nueva")
+                                             : T ("Suelta para crear ") + String ((int) items.size()) + T (" pistas nuevas");
+        g.drawText (msg, getLocalBounds().removeFromTop (30), Justification::centred);
+    }
+
+private:
+    std::vector<Item> items;
+    int ghostTop = 0, startX = 0, headerX = 0;
+    double pps = 100.0;
+};
+
+class MainComponent : public Component, public RowOwner, public FileDragAndDropTarget, private Timer
 {
 public:
     MainComponent()
@@ -1730,8 +1807,9 @@ public:
             AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, T ("Audio"),
                 T ("No se pudo abrir el dispositivo de audio por defecto.\nAbre 'Audio' y elige otro driver o tarjeta.\n\n") + err);
 
-        mk (bHome, "|<", [this] { engine.position = 0; });
-        mk (bPlay, "Play", [this] { if (engine.playing) engine.pause(); else engine.play(); });
+        mk (bHome, "|<", [this] { engine.setCursor (0); });
+        // Play mientras suena = detener y volver a la posición de inicio (como Stop)
+        mk (bPlay, "Play", [this] { if (engine.playing) doStop(); else engine.play(); });
         mk (bStop, "Stop", [this] { doStop(); });
         mk (bRec,  "Rec",  [this] { doRecord(); });
         mk (bAdd,  T ("+ Pista"), [this] { addNewTrack (false); });
@@ -1834,6 +1912,7 @@ public:
         viewport.setWantsKeyboardFocus (false);   // así Supr, Inicio, Ctrl+S llegan a esta ventana
         addAndMakeVisible (viewport);
         addAndMakeVisible (bottomBar);
+        addChildComponent (dropOverlay);       // encima del timeline; solo se ve mientras se arrastran archivos
         addArea.onAdd = [this] (bool isBus) { addNewTrack (isBus); };
         content.addAndMakeVisible (addArea);
         content.addAndMakeVisible (masterRow);
@@ -1859,7 +1938,7 @@ public:
     void setCursorFromX (int x) override
     {
         const auto s = (int64) (jmax (0.0, (x - ui::headerW) / pxPerSec) * engine.sampleRate);
-        engine.position = snapSample (s);
+        engine.setCursor (snapSample (s));   // detenido: también pasa a ser la posición de inicio
     }
     void clipsChanged() override { validateSelection(); layoutContent(); repaintRows(); }
 
@@ -2321,6 +2400,7 @@ public:
 
         bottomBar.setBounds (r.removeFromBottom (ui::bottomH));
         viewport.setBounds (r);
+        dropOverlay.setBounds (r);
         layoutContent();
     }
 
@@ -2390,7 +2470,7 @@ public:
             if (engine.playing) doStop(); else engine.play();
             return true;
         }
-        if (k == KeyPress::homeKey) { engine.position = 0; return true; }
+        if (k == KeyPress::homeKey) { engine.setCursor (0); return true; }
 
         // Esc = quitar la selección de tiempo
         if (k == KeyPress::escapeKey && engine.selEnd.load() > engine.selStart.load())
@@ -2627,6 +2707,17 @@ private:
         const int x = ui::headerW + (int) (t * pxPerSec);
         playhead.setBounds (x - 1, 0, 3, content.getHeight());
 
+        // al detenerse (Stop, Play otra vez o fin de la canción) el cursor vuelve a la posición de inicio:
+        // si quedó fuera de la vista, se desplaza la vista hasta él
+        const bool nowPlaying = engine.playing.load();
+        if (wasPlaying && ! nowPlaying)
+        {
+            auto v = viewport.getViewArea();
+            if (x > v.getRight() - 40 || x < v.getX())
+                viewport.setViewPosition (jmax (0, x - 80), v.getY());
+        }
+        wasPlaying = nowPlaying;
+
         if (engine.playing)
         {
             auto v = viewport.getViewArea();
@@ -2692,13 +2783,93 @@ private:
                     continue;
                 }
                 auto* t = engine.addTrack (f.getFileNameWithoutExtension());
-                clip->startSample = engine.position.load();
+                clip->startSample = engine.startPos.load();
                 engine.addClip (*t, std::move (clip));
                 addTrackRow (t);
             }
             layoutContent();
             repaintRows();
         });
+    }
+
+    // ---------------- Arrastrar audio desde el escritorio / el Explorador ----------------
+    bool isAudioFile (const String& path) const
+    {
+        return engine.formats.findFormatForFileExtension (File (path).getFileExtension()) != nullptr;
+    }
+
+    // Una pista nueva por cada archivo, con el audio ya cargado (onda visible) a partir de la posición de inicio,
+    // lista para darle a Play.
+    void importDroppedFiles (const StringArray& paths)
+    {
+        StringArray failed;
+        int added = 0;
+
+        for (auto& p : paths)
+        {
+            const File f (p);
+            if (! isAudioFile (p)) continue;
+
+            auto clip = engine.loadClip (f);
+            if (clip == nullptr) { failed.add (f.getFileName()); continue; }
+
+            auto* t = engine.addTrack (f.getFileNameWithoutExtension());
+            clip->startSample = engine.startPos.load();
+            engine.addClip (*t, std::move (clip));
+            addTrackRow (t);
+            ++added;
+        }
+
+        layoutContent();
+        repaintRows();
+
+        if (added > 0)     // baja hasta las pistas nuevas
+            viewport.setViewPosition (viewport.getViewPositionX(),
+                                      jmax (0, content.getHeight() - viewport.getMaximumVisibleHeight()));
+
+        if (added > 0)
+            setStatus (added == 1 ? T ("Pista nueva creada") : String (added) + T (" pistas nuevas creadas"));
+
+        if (failed.size() > 0)
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Audio",
+                T ("No se pudo cargar:\n") + failed.joinIntoString ("\n")
+                    + T ("\n(formato no soportado o archivo demasiado grande)"));
+    }
+
+    bool isInterestedInFileDrag (const StringArray& files) override
+    {
+        for (auto& p : files)
+            if (isAudioFile (p)) return true;
+        return false;
+    }
+
+    void fileDragEnter (const StringArray& files, int, int) override
+    {
+        std::vector<DropOverlay::Item> items;
+        for (auto& p : files)
+        {
+            if (! isAudioFile (p)) continue;
+            DropOverlay::Item it;
+            it.name = File (p).getFileNameWithoutExtension();
+            if (std::unique_ptr<AudioFormatReader> r { engine.formats.createReaderFor (File (p)) })   // solo lee la cabecera
+                if (r->sampleRate > 0.0) it.seconds = (double) r->lengthInSamples / r->sampleRate;
+            items.push_back (it);
+        }
+
+        dropOverlay.setInfo (std::move (items), addArea.getY() - viewport.getViewPositionY(),
+                             ui::headerW - viewport.getViewPositionX()
+                                 + (int) ((double) engine.startPos.load() / engine.sampleRate * pxPerSec),
+                             pxPerSec, -viewport.getViewPositionX());
+        dropOverlay.setVisible (true);
+        dropOverlay.toFront (false);
+    }
+
+    void fileDragExit (const StringArray&) override { dropOverlay.setVisible (false); }
+
+    void filesDropped (const StringArray& files, int, int) override
+    {
+        dropOverlay.setVisible (false);
+        importDroppedFiles (files);
     }
 
     void saveProject()
@@ -2862,6 +3033,8 @@ private:
     Playhead playhead;
     Viewport viewport;
     BottomBar bottomBar { engine };
+    DropOverlay dropOverlay;
+    bool wasPlaying = false;
 
     TextButton bHome, bPlay, bStop, bRec, bAdd, bAddBus, bImport, bZoomOut, bZoomIn, bAudio, bScan, bReport, bOpen, bSave;
     TextButton bSelect, bHand, bCut, bLoop, bMasterFx;
