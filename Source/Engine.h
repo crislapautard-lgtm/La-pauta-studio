@@ -587,6 +587,27 @@ public:
         return file;
     }
 
+    // Copia de un clip (mismo audio, fades y tramo del archivo) que empieza en 'newStart'. Devuelve la copia.
+    // recordUndo = true: la copia es un paso de Ctrl+Z (el gesto del ratón lo abre él mismo con undoBegin).
+    Clip* duplicateClip (Track& t, Clip* c, int64 newStart, bool recordUndo)
+    {
+        if (recordUndo) undoBegin();
+
+        AudioBuffer<float> b (c->audio);                 // copia del audio
+        auto nc = makeClip (c->name, c->file, std::move (b), jmax<int64> (0, newStart));
+        nc->srcOffset = c->srcOffset.load();
+        nc->fadeInSamples = c->fadeInSamples.load();
+        nc->fadeOutSamples = c->fadeOutSamples.load();
+        Clip* result = nc.get();
+
+        const SpinLock::ScopedLockType sl (lock);
+        t.clips.push_back (std::move (nc));
+        return result;
+    }
+
+    // Tras cancelar una copia con undo(): se recupera el rehacer que había antes del gesto
+    void dropRedo() { redoStack = std::move (pendingRedo); pendingRedo.clear(); }
+
     // Pasa un clip de una pista a otra (misma posición en el tiempo)
     void moveClip (Track& from, Track& to, Clip* c)
     {

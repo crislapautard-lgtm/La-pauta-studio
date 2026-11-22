@@ -719,6 +719,22 @@ public:
             return;
         }
 
+        // Ctrl + clic izquierdo sobre un clip: se crea una copia y se arrastra (también a otra pista).
+        // Si sueltas sin moverla, no se queda la copia.
+        if (c != nullptr && (e.mods.isCtrlDown() || e.mods.isCommandDown()) && ! e.mods.isShiftDown())
+        {
+            eng.undoBegin();
+            if (auto* copy = eng.duplicateClip (track, c, c->startSample.load(), false))
+            {
+                dragClip = copy;
+                dragOrigStart = copy->startSample.load();
+                ctrlCopy = true;
+                owner.setSelected (&track, copy);
+                owner.clipsChanged();
+            }
+            return;
+        }
+
         // bordes del clip (por debajo de los tiradores de fade): arrastrar = recortar
         bool edgeLeft = false;
         if (c != nullptr && e.y > 14 && edgeHit (*c, e.x, edgeLeft))
@@ -834,14 +850,29 @@ public:
         {
             auto* moved = dragClip;
             dragClip = nullptr;
+            auto* dst = owner.trackAtScreenY (e.getScreenY());
+            const bool toOtherTrack = dst != nullptr && dst != &track;
+
+            // Ctrl+clic sin mover la copia: se cancela (se deshace el paso y no queda rehacer)
+            if (ctrlCopy)
+            {
+                ctrlCopy = false;
+                if (! toOtherTrack && ownsClip (moved) && moved->startSample.load() == dragOrigStart)
+                {
+                    eng.undo();
+                    eng.dropRedo();
+                    owner.setSelected (nullptr, nullptr);
+                    owner.clipsChanged();
+                    return;
+                }
+            }
 
             // soltado sobre otra pista: el clip pasa a esa pista (conserva su posición en el tiempo)
-            if (auto* dst = owner.trackAtScreenY (e.getScreenY()))
-                if (dst != &track && ownsClip (moved))
-                {
-                    eng.moveClip (track, *dst, moved);
-                    owner.setSelected (dst, moved);
-                }
+            if (toOtherTrack && ownsClip (moved))
+            {
+                eng.moveClip (track, *dst, moved);
+                owner.setSelected (dst, moved);
+            }
             eng.undoEnd();               // un clic sin mover no deja paso de deshacer
             owner.clipsChanged();
         }
@@ -975,6 +1006,7 @@ private:
     static constexpr double fadeSecs[6] = { 0.0, 0.25, 0.5, 1.0, 2.0, 4.0 };
 
     Clip* dragClip = nullptr;
+    bool ctrlCopy = false;           // el clip que se arrastra es una copia hecha con Ctrl+clic
     bool rightDown = false, rightMoved = false, rightShift = false;   // clic derecho en curso (selección de tiempo)
     Clip* rightClip = nullptr;
     int64 rightStart = 0;
@@ -2458,6 +2490,13 @@ public:
             }
         }
 
+        // Ctrl+B = copia automática del audio seleccionado, pegada justo después del original en la misma pista
+        if ((mods.isCtrlDown() || mods.isCommandDown()) && (k.getKeyCode() == 'B' || k.getKeyCode() == 'b'))
+        {
+            duplicateSelectedClip();
+            return true;
+        }
+
         // Ctrl+R = empezar a grabar (otra vez Ctrl+R = parar)
         if ((mods.isCtrlDown() || mods.isCommandDown()) && (k.getKeyCode() == 'R' || k.getKeyCode() == 'r'))
         {
@@ -2632,6 +2671,22 @@ private:
         layoutContent();         // cambian los clips y los carriles visibles
         repaintRows();
         selOverlay.repaint();
+    }
+
+    void duplicateSelectedClip()
+    {
+        validateSelection();
+        if (selClip == nullptr || selTrack == nullptr || ! engine.hasTrack (selTrack))
+        {
+            setStatus (T ("Selecciona un audio (clic sobre él) y pulsa Ctrl+B para copiarlo"));
+            return;
+        }
+
+        const int64 at = selClip->startSample.load() + selClip->audio.getNumSamples();
+        auto* copy = engine.duplicateClip (*selTrack, selClip, at, true);
+        selClip = copy;                  // la copia queda seleccionada: Ctrl+B otra vez sigue copiando hacia adelante
+        clipsChanged();
+        setStatus (T ("Audio copiado"));
     }
 
     void deleteSelectedClip()
