@@ -415,6 +415,24 @@ private:
     float dragValue = 0.0f;
 };
 
+// Selector de color libre (se abre desde el menú de color de una pista)
+class TrackColourSelector : public ColourSelector, private ChangeListener
+{
+public:
+    TrackColourSelector (Colour init, std::function<void (Colour)> cb)
+        : ColourSelector (ColourSelector::showSliders | ColourSelector::showColourspace, 4, 4), onColour (std::move (cb))
+    {
+        setCurrentColour (init, dontSendNotification);
+        addChangeListener (this);
+        setSize (260, 280);
+    }
+    ~TrackColourSelector() override { removeChangeListener (this); }
+
+private:
+    void changeListenerCallback (ChangeBroadcaster*) override { if (onColour) onColour (getCurrentColour()); }
+    std::function<void (Colour)> onColour;
+};
+
 // ---------------------------------------------------------------------------
 // Una fila = una pista: controles a la izquierda, clips a la derecha.
 // ---------------------------------------------------------------------------
@@ -507,12 +525,63 @@ public:
     }
 
     Track& getTrack() { return track; }
+    bool resizing = false;
+    int resizeStartH = 96;
 
     // alto de la fila: la pista + un carril por cada automatización visible
-    int desiredHeight() const { return ui::rowH + lanes.height(); }
+    int baseH() const { return track.uiHeight.load(); }
+
+    // Color de la pista: clic derecho en su cabecera
+    Colour trackColour() const { return Colour (track.color.load()); }
+
+    void showColourMenu()
+    {
+        static const struct { const char* name; uint32 argb; } presets[] =
+        {
+            { "Rojo", 0xffc0392b }, { "Naranja", 0xffd9822b }, { "Amarillo", 0xffd4b021 }, { "Verde", 0xff2e9d4f },
+            { "Turquesa", 0xff1f9a9a }, { "Azul", 0xff2b6cb0 }, { "Morado", 0xff7d4fb3 }, { "Rosa", 0xffc2549a },
+            { "Marrón", 0xff8a5a3c }, { "Gris", 0xff6b7280 }
+        };
+
+        PopupMenu m;
+        m.addSectionHeader (T ("Color de la pista"));
+        for (int i = 0; i < 10; ++i)
+            m.addColouredItem (i + 1, T (presets[i].name), Colour (presets[i].argb));
+        m.addSeparator();
+        m.addItem (100, T ("Otro color..."));
+        m.addItem (101, T ("Sin color (por defecto)"));
+
+        SafePointer<TrackRow> sp (this);
+        m.showMenuAsync (PopupMenu::Options(), [sp] (int res)
+        {
+            auto* self = sp.getComponent();
+            if (self == nullptr || res == 0) return;
+
+            if (res >= 1 && res <= 10) self->track.color = presets[res - 1].argb;
+            else if (res == 101)       self->track.color = 0;
+            else if (res == 100)
+            {
+                const Colour start = self->track.color.load() != 0 ? self->trackColour() : Colour (0xff2b5a85);
+                auto box = std::make_unique<TrackColourSelector> (start, [sp] (Colour c)
+                {
+                    if (auto* s2 = sp.getComponent()) { s2->track.color = c.withAlpha (1.0f).getARGB(); s2->repaint(); }
+                });
+                CallOutBox::launchAsynchronously (std::move (box), self->getScreenBounds().withWidth (ui::headerW).withHeight (28), nullptr);
+                return;
+            }
+            self->repaint();
+        });
+    }
+    int desiredHeight() const { return baseH() + lanes.height(); }
+
+    // Cambiar el tamaño de la pista: arrastra el borde inferior de su cabecera (doble clic = tamaño original)
+    bool onGrip (const MouseEvent& e) const { return e.x < ui::headerW && e.y >= baseH() - 7 && e.y < baseH() + 2; }
+    static constexpr int minH = 48, maxH = 400;
 
     void resized() override
     {
+        const bool roomy = baseH() >= 90;       // en pistas bajas se ocultan fader, pan y Input FX
+        vol.setVisible (roomy); pan.setVisible (roomy); btnInFx.setVisible (roomy); btnMon.setVisible (roomy);
         nameLabel.setBounds (6, 4, 128, 22);
         btnSend.setBounds (138, 4, 50, 22);
         btnAuto.setBounds (192, 4, 52, 22);
@@ -548,7 +617,7 @@ public:
         if (std::abs (l - lastL) > 0.002f || std::abs (r - lastR) > 0.002f)
         {
             lastL = l; lastR = r;
-            repaint (248, 0, 52, ui::rowH);
+            repaint (248, 0, 52, baseH());
         }
 
         // "Input FX" se ilumina si la pista tiene efectos de entrada
@@ -567,7 +636,7 @@ public:
             if (p != lastPos)
             {
                 lastPos = p;
-                repaint (0, ui::rowH, ui::headerW, lanes.height());
+                repaint (0, baseH(), ui::headerW, lanes.height());
             }
         }
     }
@@ -575,21 +644,30 @@ public:
     void paint (Graphics& g) override
     {
         g.fillAll (Colour (0xff1c1c1c));
-        g.setColour (track.isBus.load() ? Colour (0xff3a2a4a) : Colour (0xff2a2a2a));   // buses en morado
+        const Colour base = track.isBus.load() ? Colour (0xff3a2a4a) : Colour (0xff2a2a2a);   // buses en morado
+        g.setColour (track.color.load() != 0 ? base.interpolatedWith (trackColour(), 0.35f) : base);
         g.fillRect (0, 0, ui::headerW, getHeight());
+        if (track.color.load() != 0)
+        {
+            g.setColour (trackColour());
+            g.fillRect (0, 0, 5, getHeight());
+        }
         g.setColour (Colours::black);
         g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
         g.drawVerticalLine (ui::headerW - 1, 0.0f, (float) getHeight());
+        g.setColour (Colour (0xff555555));
+        g.fillRect (ui::headerW / 2 - 14, baseH() - 4, 28, 2);        // agarrador de tamaño
 
         auto bar = [&] (int x, float v)
         {
             const float db = Decibels::gainToDecibels (v, -60.0f);
             const float f = jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
-            const int h = (int) (f * 84.0f);
+            const int mh = jmax (20, baseH() - 12);
+            const int h = (int) (f * (float) mh);
             g.setColour (Colours::black);
-            g.fillRect (x, 6, 14, 84);
+            g.fillRect (x, 6, 14, mh);
             g.setColour (db > -3.0f ? Colours::red : (db > -12.0f ? Colours::yellow : Colours::limegreen));
-            g.fillRect (x, 6 + 84 - h, 14, h);
+            g.fillRect (x, 6 + mh - h, 14, h);
         };
         bar (252, track.peakL.load());
         bar (272, track.peakR.load());
@@ -597,16 +675,17 @@ public:
         const double pps = owner.pps();
         const auto visible = g.getClipBounds();
 
-        lanes.paint (g, ui::rowH, getWidth(), pps, false);   // fondo y cabeceras de los carriles
+        lanes.paint (g, baseH(), getWidth(), pps, false);   // fondo y cabeceras de los carriles
         drawGrid (g, pps, visible);
 
         for (auto& c : track.clips)
         {
             const double startSec = (double) c->startSample.load() / eng.sampleRate;
             const double lenSec = (double) c->audio.getNumSamples() / eng.sampleRate;
-            Rectangle<int> r (ui::headerW + (int) (startSec * pps), 4, jmax (2, (int) (lenSec * pps)), ui::rowH - 8);
+            Rectangle<int> r (ui::headerW + (int) (startSec * pps), 4, jmax (2, (int) (lenSec * pps)), baseH() - 8);
 
-            g.setColour (owner.isClipSelected (c.get()) ? Colour (0xffd08a2e) : Colour (0xff2b5a85));   // seleccionado = naranja
+            g.setColour (owner.isClipSelected (c.get()) ? Colour (0xffd08a2e)
+                         : (track.color.load() != 0 ? trackColour().darker (0.35f) : Colour (0xff2b5a85)));   // seleccionado = naranja
             g.fillRect (r);
 
             auto vis = r.getIntersection (visible);
@@ -660,7 +739,7 @@ public:
             g.drawRect (r);
         }
 
-        lanes.paint (g, ui::rowH, getWidth(), pps, true);    // curvas y puntos encima de todo
+        lanes.paint (g, baseH(), getWidth(), pps, true);    // curvas y puntos encima de todo
 
         g.setColour (Colours::black);
         g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
@@ -669,12 +748,13 @@ public:
     void mouseMove (const MouseEvent& e) override
     {
         MouseCursor::StandardCursorType cur = MouseCursor::NormalCursor;
-        if (e.x >= ui::headerW && e.y < ui::rowH)
+        if (onGrip (e)) { setMouseCursor (MouseCursor::UpDownResizeCursor); return; }
+        if (e.x >= ui::headerW && e.y < baseH())
         {
             if (owner.getTool() == ui::toolHand)     cur = MouseCursor::DraggingHandCursor;
             else if (owner.getTool() == ui::toolCut) cur = MouseCursor::CrosshairCursor;
         }
-        if (e.x >= ui::headerW && e.y < ui::rowH && owner.getTool() != ui::toolCut)
+        if (e.x >= ui::headerW && e.y < baseH() && owner.getTool() != ui::toolCut)
         {
             bool left = false;
             if (auto* c = clipAt (e.x))
@@ -686,13 +766,23 @@ public:
 
     void mouseDown (const MouseEvent& e) override
     {
+        if (onGrip (e) && ! e.mods.isPopupMenu())
+        {
+            resizing = true;
+            resizeStartH = baseH();
+            return;
+        }
         dragClip = nullptr;
         trimClip = nullptr;
         rightDown = false;
         emptyDown = false;
         groupDrag = false;
-        if (e.y >= ui::rowH) { lanes.mouseDown (e, ui::rowH); return; }   // zona de carriles
-        if (e.x < ui::headerW) return;
+        if (e.y >= baseH()) { lanes.mouseDown (e, baseH()); return; }   // zona de carriles
+        if (e.x < ui::headerW)
+        {
+            if (e.mods.isPopupMenu()) showColourMenu();
+            return;
+        }
 
         auto* c = clipAt (e.x);
 
@@ -806,6 +896,12 @@ public:
 
     void mouseDrag (const MouseEvent& e) override
     {
+        if (resizing)
+        {
+            const int nh = jlimit (minH, maxH, resizeStartH + e.getDistanceFromDragStartY());
+            if (nh != baseH()) { track.uiHeight = nh; resized(); owner.clipsChanged(); }
+            return;
+        }
         if (rightDown)
         {
             if (e.getDistanceFromDragStart() > 4) rightMoved = true;
@@ -833,7 +929,7 @@ public:
             return;
         }
 
-        if (lanes.mouseDrag (e, ui::rowH)) return;
+        if (lanes.mouseDrag (e, baseH())) return;
 
         if (fadeClip != nullptr)
         {
@@ -864,8 +960,14 @@ public:
         repaint();
     }
 
+    void mouseDoubleClick (const MouseEvent& e) override
+    {
+        if (onGrip (e)) { track.uiHeight = 96; resized(); owner.clipsChanged(); }
+    }
+
     void mouseUp (const MouseEvent& e) override
     {
+        if (resizing) { resizing = false; return; }
         if (rightDown)
         {
             rightDown = false;
@@ -1816,7 +1918,7 @@ private:
         {
             if (e.mods.isPopupMenu() || e.getDistanceFromDragStart() < 4) return;
             if (! dragging) { dragging = true; repaint(); }
-            owner.dragTo (e.getEventRelativeTo (&owner.body).y);
+            owner.dragTo (e.getEventRelativeToComponent (&owner.body).y);
         }
 
         void mouseUp (const MouseEvent& e) override
@@ -3705,7 +3807,7 @@ private:
 
         for (auto& row : rows)
         {
-            const int y0 = row->getY() + 4, y1 = row->getY() + ui::rowH - 4;
+            const int y0 = row->getY() + 4, y1 = row->getY() + row->baseH() - 4;
             if (r.getBottom() < y0 || r.getY() > y1) continue;
 
             for (auto& c : row->getTrack().clips)

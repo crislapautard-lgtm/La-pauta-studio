@@ -107,6 +107,8 @@ struct Track
     std::atomic<float> gain { 1.0f }, pan { 0.0f }, peakL { 0.0f }, peakR { 0.0f };
     std::atomic<bool> mute { false }, solo { false }, armed { false };
     std::atomic<int> inputChannel { 0 };
+    std::atomic<uint32> color { 0 };                   // color de la pista (ARGB); 0 = el color por defecto
+    std::atomic<int> uiHeight { 96 };                  // alto de la pista en pantalla (lo elige el usuario)
 
     // Input FX: efectos que se aplican a la entrada de la tarjeta ANTES de grabar (la grabación sale con ellos)
     std::vector<std::unique_ptr<AudioPluginInstance>> inputPlugins;
@@ -1356,6 +1358,8 @@ public:
         {
             auto* te = root.createNewChildElement ("TRACK");
             te->setAttribute ("name", t->name);
+            te->setAttribute ("height", t->uiHeight.load());
+            te->setAttribute ("color", String (t->color.load()));
             te->setAttribute ("gain", (double) t->gain.load());
             te->setAttribute ("pan", (double) t->pan.load());
             te->setAttribute ("mute", t->mute.load());
@@ -1488,6 +1492,8 @@ public:
             trackXml.push_back (te);
             auto* t = addTrack (te->getStringAttribute ("name", "Pista"), te->getBoolAttribute ("bus"));
             t->gain = (float) te->getDoubleAttribute ("gain", 1.0);
+            t->uiHeight = jlimit (48, 400, te->getIntAttribute ("height", 96));
+            t->color = (uint32) te->getStringAttribute ("color", "0").getLargeIntValue();
             t->pan = (float) te->getDoubleAttribute ("pan", 0.0);
             t->mute = te->getBoolAttribute ("mute");
             t->solo = te->getBoolAttribute ("solo");
