@@ -585,14 +585,23 @@ public:
         nameLabel.setBounds (6, 4, 128, 22);
         btnSend.setBounds (138, 4, 50, 22);
         btnAuto.setBounds (192, 4, 52, 22);
-        btnMute.setBounds (6, 30, 32, 24);
-        btnSolo.setBounds (42, 30, 32, 24);
-        btnArm.setBounds (78, 30, 32, 24);
-        btnFx.setBounds (114, 30, 32, 24);
-        btnDel.setBounds (150, 30, 32, 24);
-        inputBox.setBounds (188, 30, 56, 24);
-        vol.setBounds (6, 58, track.isBus.load() ? 238 : 150, 18);
-        pan.setBounds (6, 76, track.isBus.load() ? 238 : 150, 18);
+        if (track.isBus.load())      // un bus no tiene Solo, Armar ni entrada: los botones van juntos, sin huecos
+        {
+            btnMute.setBounds (6, 30, 32, 24);
+            btnFx.setBounds (42, 30, 48, 24);
+            btnDel.setBounds (94, 30, 32, 24);
+        }
+        else
+        {
+            btnMute.setBounds (6, 30, 32, 24);
+            btnSolo.setBounds (42, 30, 32, 24);
+            btnArm.setBounds (78, 30, 32, 24);
+            btnFx.setBounds (114, 30, 32, 24);
+            btnDel.setBounds (150, 30, 32, 24);
+            inputBox.setBounds (188, 30, 56, 24);
+        }
+        vol.setBounds (6, 58, 150, 18);
+        pan.setBounds (6, 76, 150, 18);
         btnInFx.setBounds (160, 58, 84, 18);
         btnMon.setBounds (160, 76, 84, 18);
     }
