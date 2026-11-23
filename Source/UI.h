@@ -1,6 +1,8 @@
 #pragma once
 #include <JuceHeader.h>
 #include <map>
+#include <algorithm>
+#include <limits>
 #include "Engine.h"
 
 using namespace juce;
@@ -64,6 +66,14 @@ struct RowOwner
     virtual double beatSeconds() const = 0;
     virtual Clip* selectedClip() const = 0;
     virtual void setSelected (Track*, Clip*) = 0;
+    virtual bool isClipSelected (const Clip*) const = 0;            // ¿está en la selección (una o varias)?
+    virtual int selectionCount() const = 0;
+    virtual void groupDragBegin() = 0;                              // mover varios clips seleccionados a la vez
+    virtual void groupDragTo (int64 deltaSamples) = 0;
+    virtual void groupDragEnd() = 0;
+    virtual void marqueeBegin (Point<int> screenPos) = 0;           // cuadro de selección con el ratón
+    virtual void marqueeDrag (Point<int> screenPos) = 0;
+    virtual void marqueeEnd() = 0;
     virtual void setLoopFromClip (Clip&) = 0;
     virtual void toggleLoop() = 0;
 
@@ -446,7 +456,7 @@ public:
         addAndMakeVisible (inputBox);
 
         btnSend.setButtonText (T ("Env"));
-        btnSend.setTooltip (T ("Salida y envíos a buses"));
+        btnSend.setTooltip (T ("Salida y envíos a buses (un fader por bus)"));
         btnSend.onClick = [this] { owner.showSendPanel (track, btnSend); };
         addAndMakeVisible (btnSend);
 
@@ -465,14 +475,13 @@ public:
         btnMon.setTooltip (T ("Escuchar tu voz con los Input FX mientras la pista está armada (usa audífonos para evitar acople)"));
         btnMon.onClick = [this] { track.monitor = btnMon.getToggleState(); };
 
-        if (track.isBus.load())   // un bus no graba ni tiene solo/envíos
+        if (track.isBus.load())   // un bus no graba ni tiene solo (sí tiene envíos hacia otros buses)
         {
             btnInFx.setVisible (false);
             btnMon.setVisible (false);
             btnSolo.setVisible (false);
             btnArm.setVisible (false);
             inputBox.setVisible (false);
-            btnSend.setVisible (false);
         }
 
         vol.setSliderStyle (Slider::LinearHorizontal);
@@ -504,7 +513,7 @@ public:
 
     void resized() override
     {
-        nameLabel.setBounds (6, 4, track.isBus.load() ? 182 : 128, 22);
+        nameLabel.setBounds (6, 4, 128, 22);
         btnSend.setBounds (138, 4, 50, 22);
         btnAuto.setBounds (192, 4, 52, 22);
         btnMute.setBounds (6, 30, 32, 24);
@@ -519,8 +528,22 @@ public:
         btnMon.setBounds (160, 76, 84, 18);
     }
 
+    // Pon el nombre en edición (al crear un bus nuevo)
+    void beginRename() { nameLabel.showEditor(); }
+
     void updateMeters()
     {
+        // el Mezclador puede mover fader, pan, mute y solo: la fila los sigue
+        if (! vol.isMouseButtonDown())
+        {
+            const double db = Decibels::gainToDecibels (track.gain.load(), -60.0f);
+            if (std::abs (vol.getValue() - db) > 0.05) vol.setValue (db, dontSendNotification);
+        }
+        if (! pan.isMouseButtonDown() && std::abs (pan.getValue() - (double) track.pan.load()) > 0.005)
+            pan.setValue (track.pan.load(), dontSendNotification);
+        if (btnMute.getToggleState() != track.mute.load()) btnMute.setToggleState (track.mute.load(), dontSendNotification);
+        if (btnSolo.getToggleState() != track.solo.load()) btnSolo.setToggleState (track.solo.load(), dontSendNotification);
+
         const float l = track.peakL.load(), r = track.peakR.load();
         if (std::abs (l - lastL) > 0.002f || std::abs (r - lastR) > 0.002f)
         {
@@ -583,7 +606,7 @@ public:
             const double lenSec = (double) c->audio.getNumSamples() / eng.sampleRate;
             Rectangle<int> r (ui::headerW + (int) (startSec * pps), 4, jmax (2, (int) (lenSec * pps)), ui::rowH - 8);
 
-            g.setColour (c.get() == owner.selectedClip() ? Colour (0xff3d7cb8) : Colour (0xff2b5a85));
+            g.setColour (owner.isClipSelected (c.get()) ? Colour (0xffd08a2e) : Colour (0xff2b5a85));   // seleccionado = naranja
             g.fillRect (r);
 
             auto vis = r.getIntersection (visible);
@@ -666,6 +689,8 @@ public:
         dragClip = nullptr;
         trimClip = nullptr;
         rightDown = false;
+        emptyDown = false;
+        groupDrag = false;
         if (e.y >= ui::rowH) { lanes.mouseDown (e, ui::rowH); return; }   // zona de carriles
         if (e.x < ui::headerW) return;
 
@@ -708,6 +733,18 @@ public:
         }
 
         const int tool = owner.getTool();
+        const bool ctrlDown = e.mods.isCtrlDown() || e.mods.isCommandDown();
+
+        // Varios clips seleccionados con el cuadro: arrastrar uno de ellos mueve todos juntos
+        if (c != nullptr && tool != ui::toolCut && ! ctrlDown && owner.isClipSelected (c) && owner.selectionCount() > 1)
+        {
+            eng.undoBegin();
+            owner.groupDragBegin();
+            groupDrag = true;
+            groupAnchor = c->startSample.load();
+            return;
+        }
+
         owner.setSelected (c != nullptr ? &track : nullptr, c);
 
         if (c != nullptr && tool == ui::toolCut)
@@ -753,6 +790,14 @@ public:
             dragClip = c;
             dragOrigStart = c->startSample.load();
         }
+        else if (c == nullptr && tool != ui::toolCut)
+        {
+            // espacio vacío: clic = deseleccionar y mover el cursor; arrastrar = cuadro de selección
+            emptyDown = true;
+            emptyMoved = false;
+            emptyX = e.x;
+            owner.marqueeBegin (e.getScreenPosition());
+        }
         else
         {
             owner.setCursorFromX (e.x);
@@ -771,6 +816,20 @@ public:
                 eng.selEnd = jmax (rightStart, here);
                 owner.timeSelectionChanged();
             }
+            return;
+        }
+
+        if (emptyDown)
+        {
+            if (e.getDistanceFromDragStart() > 4) emptyMoved = true;
+            if (emptyMoved) owner.marqueeDrag (e.getScreenPosition());
+            return;
+        }
+
+        if (groupDrag)
+        {
+            const auto delta = (int64) (e.getDistanceFromDragStartX() / owner.pps() * eng.sampleRate);
+            owner.groupDragTo (owner.snapSample (groupAnchor + delta) - groupAnchor);
             return;
         }
 
@@ -822,6 +881,22 @@ public:
                 owner.showRangeMenu (track);                          // Mayús + clic derecho con selección hecha
             else
                 showContextMenu (c);                                  // clic derecho normal
+            return;
+        }
+
+        if (emptyDown)
+        {
+            emptyDown = false;
+            if (emptyMoved) owner.marqueeEnd();
+            else owner.setCursorFromX (emptyX);
+            emptyMoved = false;
+            return;
+        }
+
+        if (groupDrag)
+        {
+            groupDrag = false;
+            owner.groupDragEnd();
             return;
         }
 
@@ -1006,6 +1081,9 @@ private:
     static constexpr double fadeSecs[6] = { 0.0, 0.25, 0.5, 1.0, 2.0, 4.0 };
 
     Clip* dragClip = nullptr;
+    bool emptyDown = false, emptyMoved = false, groupDrag = false;   // cuadro de selección / mover grupo
+    int emptyX = 0;
+    int64 groupAnchor = 0;
     bool ctrlCopy = false;           // el clip que se arrastra es una copia hecha con Ctrl+clic
     bool rightDown = false, rightMoved = false, rightShift = false;   // clic derecho en curso (selección de tiempo)
     Clip* rightClip = nullptr;
@@ -1194,76 +1272,116 @@ private:
 // ---------------------------------------------------------------------------
 // Panel de salida y envíos de una pista (se abre con el botón "Env")
 // ---------------------------------------------------------------------------
+class SendRow : public Component
+{
+public:
+    SendRow (Engine& e, Track& from, Track& to) : eng (e), src (from), dst (to)
+    {
+        const float cur = eng.getSendLevel (&src, &dst);
+        const bool allowed = eng.canSend (&src, &dst) || cur > 0.0f;     // false = enviarle crearía un lazo
+
+        lbl.setText (allowed ? dst.name : dst.name + T (" (lazo: no permitido)"), dontSendNotification);
+        lbl.setColour (Label::textColourId, allowed ? Colours::white : Colours::grey);
+        lbl.setMinimumHorizontalScale (0.7f);
+        addAndMakeVisible (lbl);
+
+        sl.setSliderStyle (Slider::LinearHorizontal);
+        sl.setTextBoxStyle (Slider::TextBoxRight, true, 58, 20);
+        sl.setRange (-60.0, 6.0, 0.1);
+        sl.setSkewFactorFromMidPoint (-12.0);
+        sl.setDoubleClickReturnValue (true, 0.0);
+        sl.setScrollWheelEnabled (false);
+        sl.textFromValueFunction = [] (double v) { return v <= -59.9 ? String ("off") : String (v, 1) + " dB"; };
+        sl.setValue (cur > 0.0f ? Decibels::gainToDecibels (cur, -60.0f) : -60.0, dontSendNotification);
+        sl.setEnabled (allowed);
+        sl.onValueChange = [this]
+        {
+            const double v = sl.getValue();
+            eng.setSendLevel (&src, &dst, v <= -59.9 ? 0.0f : Decibels::decibelsToGain ((float) v, -60.0f));
+        };
+        addAndMakeVisible (sl);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (4, 2);
+        lbl.setBounds (r.removeFromLeft (96));
+        sl.setBounds (r);
+    }
+
+private:
+    Engine& eng;
+    Track& src;
+    Track& dst;
+    Label lbl;
+    Slider sl;
+};
+
 class SendPanel : public Component
 {
 public:
     SendPanel (Engine& e, Track& t) : eng (e), track (t)
     {
         buses = eng.busList();
-        setSize (260, 176);
+        buses.erase (std::remove (buses.begin(), buses.end(), &track), buses.end());   // un bus no se envía a sí mismo
 
-        lblOut.setText (T ("Salida de la pista"), dontSendNotification);
-        addAndMakeVisible (lblOut);
+        constexpr int panelW = 280, rowH = 28;
+        int y = 8;
 
-        outBox.addItem ("Master", 1);
-        for (size_t i = 0; i < buses.size(); ++i)
-            outBox.addItem (buses[i]->name, (int) i + 2);
-        outBox.setSelectedId (idOf (track.outputBus.load()), dontSendNotification);
-        outBox.onChange = [this]
+        if (! track.isBus.load())      // la salida de un bus siempre es el Master
         {
-            const int id = outBox.getSelectedId();
-            track.outputBus = id >= 2 ? buses[(size_t) id - 2] : nullptr;
-        };
-        addAndMakeVisible (outBox);
+            lblOut.setText (T ("Salida de la pista"), dontSendNotification);
+            lblOut.setBounds (10, y, panelW - 20, 18);
+            addAndMakeVisible (lblOut);
+            y += 20;
 
-        for (int s = 0; s < 2; ++s)
-        {
-            lblSend[s].setText (T ("Envío ") + String (s + 1), dontSendNotification);
-            addAndMakeVisible (lblSend[s]);
-
-            sendBox[s].addItem (T ("(ninguno)"), 1);
+            outBox.addItem ("Master", 1);
             for (size_t i = 0; i < buses.size(); ++i)
-                sendBox[s].addItem (buses[i]->name, (int) i + 2);
-            sendBox[s].setSelectedId (idOf (track.sendTarget[s].load()), dontSendNotification);
-            sendBox[s].onChange = [this, s]
+                outBox.addItem (buses[i]->name, (int) i + 2);
+            outBox.setSelectedId (idOf (track.outputBus.load()), dontSendNotification);
+            outBox.onChange = [this]
             {
-                const int id = sendBox[s].getSelectedId();
-                track.sendTarget[s] = id >= 2 ? buses[(size_t) id - 2] : nullptr;
+                const int id = outBox.getSelectedId();
+                track.outputBus = id >= 2 ? buses[(size_t) id - 2] : nullptr;
             };
-            addAndMakeVisible (sendBox[s]);
-
-            lvl[s].setSliderStyle (Slider::LinearHorizontal);
-            lvl[s].setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
-            lvl[s].setRange (-60.0, 6.0, 0.1);
-            lvl[s].setDoubleClickReturnValue (true, -12.0);
-            lvl[s].setValue (Decibels::gainToDecibels (track.sendLevel[s].load(), -60.0f), dontSendNotification);
-            lvl[s].setPopupDisplayEnabled (true, true, nullptr);
-            lvl[s].onValueChange = [this, s]
-            {
-                track.sendLevel[s] = Decibels::decibelsToGain ((float) lvl[s].getValue(), -60.0f);
-            };
-            addAndMakeVisible (lvl[s]);
+            outBox.setBounds (10, y, panelW - 20, 24);
+            addAndMakeVisible (outBox);
+            y += 32;
         }
+
+        lblSends.setText (track.isBus.load() ? T ("Este bus envía a:") : T ("Envíos a buses (un fader por bus):"), dontSendNotification);
+        lblSends.setBounds (10, y, panelW - 20, 18);
+        addAndMakeVisible (lblSends);
+        y += 22;
 
         if (buses.empty())
         {
-            hint.setText (T ("Crea un bus con '+ Bus' en la barra superior."), dontSendNotification);
+            hint.setText (T ("Crea un bus con '+ Bus de envío' en la barra superior."), dontSendNotification);
             hint.setFont (Font (FontOptions (12.0f)));
+            hint.setBounds (10, y, panelW - 20, 18);
             addAndMakeVisible (hint);
+            y += 24;
         }
-    }
+        else
+        {
+            for (size_t i = 0; i < buses.size(); ++i)
+            {
+                auto row = std::make_unique<SendRow> (eng, track, *buses[i]);
+                row->setBounds (0, (int) i * rowH, panelW - 10, rowH);
+                body.addAndMakeVisible (*row);
+                sendRows.push_back (std::move (row));
+            }
+            body.setSize (panelW - 10, (int) buses.size() * rowH);
 
-    void resized() override
-    {
-        lblOut.setBounds (10, 8, 240, 18);
-        outBox.setBounds (10, 28, 240, 24);
-        lblSend[0].setBounds (10, 58, 240, 18);
-        sendBox[0].setBounds (10, 78, 120, 24);
-        lvl[0].setBounds (134, 78, 116, 24);
-        lblSend[1].setBounds (10, 106, 240, 18);
-        sendBox[1].setBounds (10, 126, 120, 24);
-        lvl[1].setBounds (134, 126, 116, 24);
-        hint.setBounds (10, 152, 240, 18);
+            const int vh = jmin (6 * rowH, (int) buses.size() * rowH + 2);
+            vp.setViewedComponent (&body, false);
+            vp.setScrollBarsShown (true, false);
+            vp.setBounds (0, y, panelW, vh);
+            addAndMakeVisible (vp);
+            y += vh + 6;
+        }
+
+        setSize (panelW, y + 4);
     }
 
 private:
@@ -1277,9 +1395,294 @@ private:
     Engine& eng;
     Track& track;
     std::vector<Track*> buses;
-    Label lblOut, lblSend[2], hint;
-    ComboBox outBox, sendBox[2];
-    Slider lvl[2];
+    Label lblOut, lblSends, hint;
+    ComboBox outBox;
+    std::vector<std::unique_ptr<SendRow>> sendRows;      // se declara antes que 'body' y 'vp' (se destruyen después)
+    Component body;
+    Viewport vp;
+};
+
+// ---------------------------------------------------------------------------
+// Mezclador: una tira por pista y por bus (fader, pan, mute, solo, medidor, envíos) y el Master
+// ---------------------------------------------------------------------------
+class MixerStrip : public Component
+{
+public:
+    static constexpr int stripW = 88;
+
+    // track == nullptr: tira del Master
+    MixerStrip (Engine& e, Track* t, std::function<void (Track&, Component&)> sendFn, std::function<void (double)> masterFn)
+        : eng (e), track (t), onMasterDb (std::move (masterFn))
+    {
+        const bool master = track == nullptr;
+        const bool bus = track != nullptr && track->isBus.load();
+
+        nameLabel.setText (master ? String ("MASTER") : track->name, dontSendNotification);
+        nameLabel.setJustificationType (Justification::centred);
+        nameLabel.setColour (Label::textColourId, Colours::white);
+        nameLabel.setFont (Font (FontOptions (12.0f, Font::bold)));
+        addAndMakeVisible (nameLabel);
+
+        fader.setSliderStyle (Slider::LinearVertical);
+        fader.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
+        fader.setRange (-60.0, 6.0, 0.1);
+        fader.setSkewFactorFromMidPoint (-12.0);
+        fader.setDoubleClickReturnValue (true, 0.0);
+        fader.setScrollWheelEnabled (false);
+        fader.setPopupDisplayEnabled (true, true, nullptr);
+        fader.onValueChange = [this]
+        {
+            const double db = fader.getValue();
+            const float gn = Decibels::decibelsToGain ((float) db, -60.0f);
+            if (track == nullptr)
+            {
+                eng.masterGain = gn;
+                if (onMasterDb) onMasterDb (db);
+            }
+            else if (eng.hasTrack (track))
+                track->gain = gn;
+            showDb (db);
+        };
+        addAndMakeVisible (fader);
+
+        dbLabel.setJustificationType (Justification::centred);
+        dbLabel.setFont (Font (FontOptions (11.0f)));
+        dbLabel.setColour (Label::textColourId, Colours::lightgrey);
+        addAndMakeVisible (dbLabel);
+
+        if (! master)
+        {
+            pan.setSliderStyle (Slider::LinearHorizontal);
+            pan.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
+            pan.setRange (-1.0, 1.0, 0.01);
+            pan.setDoubleClickReturnValue (true, 0.0);
+            pan.setScrollWheelEnabled (false);
+            pan.setPopupDisplayEnabled (true, true, nullptr);
+            pan.onValueChange = [this] { if (eng.hasTrack (track)) track->pan = (float) pan.getValue(); };
+            addAndMakeVisible (pan);
+
+            btnEnv.setButtonText (T ("Envíos"));
+            btnEnv.setTooltip (T ("Salida y envíos a buses"));
+            btnEnv.onClick = [this, sendFn] { if (eng.hasTrack (track)) sendFn (*track, btnEnv); };
+            addAndMakeVisible (btnEnv);
+
+            btnM.setButtonText ("M");
+            btnM.setClickingTogglesState (true);
+            btnM.setColour (TextButton::buttonOnColourId, Colour (0xffd9a400));
+            btnM.onClick = [this] { if (eng.hasTrack (track)) track->mute = btnM.getToggleState(); };
+            addAndMakeVisible (btnM);
+
+            if (! bus)
+            {
+                btnS.setButtonText ("S");
+                btnS.setClickingTogglesState (true);
+                btnS.setColour (TextButton::buttonOnColourId, Colour (0xff2e9d4f));
+                btnS.onClick = [this] { if (eng.hasTrack (track)) track->solo = btnS.getToggleState(); };
+                addAndMakeVisible (btnS);
+            }
+        }
+
+        refresh();
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (4);
+        nameLabel.setBounds (r.removeFromTop (20));
+        if (track != nullptr)
+        {
+            btnEnv.setBounds (r.removeFromTop (22));
+            pan.setBounds (r.removeFromTop (18));
+            auto row = r.removeFromTop (22);
+            const bool bus = track->isBus.load();
+            btnM.setBounds (bus ? row : row.removeFromLeft (row.getWidth() / 2 - 1));
+            if (! bus) btnS.setBounds (row.withTrimmedLeft (2));
+        }
+        else r.removeFromTop (62);
+
+        dbLabel.setBounds (r.removeFromBottom (18));
+        fader.setBounds (r.removeFromLeft (40));
+        meter = r.reduced (8, 4);
+    }
+
+    // sincroniza con los cambios hechos fuera del mezclador (filas de pista, automatización...)
+    void refresh()
+    {
+        if (track != nullptr && ! eng.hasTrack (track)) return;
+
+        if (nameLabel.getText() != (track != nullptr ? track->name : String ("MASTER")))
+            nameLabel.setText (track != nullptr ? track->name : String ("MASTER"), dontSendNotification);
+
+        const float gn = track != nullptr ? track->gain.load() : eng.masterGain.load();
+        const double db = Decibels::gainToDecibels (gn, -60.0f);
+        if (! fader.isMouseButtonDown() && std::abs (fader.getValue() - db) > 0.05)
+            fader.setValue (db, dontSendNotification);
+        showDb (db);
+
+        if (track != nullptr)
+        {
+            if (! pan.isMouseButtonDown()) pan.setValue (track->pan.load(), dontSendNotification);
+            btnM.setToggleState (track->mute.load(), dontSendNotification);
+            if (! track->isBus.load()) btnS.setToggleState (track->solo.load(), dontSendNotification);
+        }
+        repaint (meter.expanded (2));
+    }
+
+    void paint (Graphics& g) override
+    {
+        const bool master = track == nullptr;
+        if (! master && ! eng.hasTrack (track)) return;
+
+        g.fillAll (master ? Colour (0xff3a2c2c) : (track->isBus.load() ? Colour (0xff3a2a4a) : Colour (0xff2a2a2a)));
+        g.setColour (Colours::black);
+        g.drawRect (getLocalBounds());
+
+        const float l = master ? eng.masterRmsL.load() : track->peakL.load();
+        const float r = master ? eng.masterRmsR.load() : track->peakR.load();
+        const int bw = meter.getWidth() / 2 - 1;
+        auto bar = [&] (int x, float v)
+        {
+            const float db = Decibels::gainToDecibels (v, -60.0f);
+            const float f = jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
+            const int h = (int) (f * (float) meter.getHeight());
+            g.setColour (Colours::black);
+            g.fillRect (x, meter.getY(), bw, meter.getHeight());
+            g.setColour (db > -3.0f ? Colours::red : (db > -12.0f ? Colours::yellow : Colours::limegreen));
+            g.fillRect (x, meter.getBottom() - h, bw, h);
+        };
+        bar (meter.getX(), l);
+        bar (meter.getX() + bw + 2, r);
+    }
+
+private:
+    void showDb (double db)
+    {
+        dbLabel.setText (db <= -59.9 ? String ("-inf") : String (db, 1) + " dB", dontSendNotification);
+    }
+
+    Engine& eng;
+    Track* track;
+    std::function<void (double)> onMasterDb;
+    Label nameLabel, dbLabel;
+    Slider fader, pan;
+    TextButton btnEnv, btnM, btnS;
+    Rectangle<int> meter;
+};
+
+class MixerPanel : public Component, private Timer
+{
+public:
+    MixerPanel (Engine& e, std::function<void (Track&, Component&)> sendFn, std::function<void (double)> masterFn,
+                std::function<void()> addBusFn)
+        : eng (e), onSend (std::move (sendFn)), onMaster (std::move (masterFn))
+    {
+        btnAddBus.setButtonText (T ("+ Bus de envío"));
+        btnAddBus.setTooltip (T ("Crea un bus de envío nuevo (puedes ponerle nombre: Reverb, Delay, Coro...)"));
+        btnAddBus.onClick = [addBusFn] { if (addBusFn) addBusFn(); };
+        addAndMakeVisible (btnAddBus);
+
+        hint.setText (T ("Los buses (morado) reciben envíos de pistas y de otros buses. Botón 'Envíos' de cada tira."), dontSendNotification);
+        hint.setColour (Label::textColourId, Colours::grey);
+        hint.setFont (Font (FontOptions (12.0f)));
+        addAndMakeVisible (hint);
+
+        vp.setViewedComponent (&holder, false);
+        vp.setScrollBarsShown (false, true);
+        addAndMakeVisible (vp);
+
+        setSize (820, 420);
+        rebuild();
+        startTimerHz (20);
+    }
+
+    ~MixerPanel() override { stopTimer(); }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        auto top = r.removeFromTop (30).reduced (6, 4);
+        btnAddBus.setBounds (top.removeFromLeft (130));
+        hint.setBounds (top.reduced (8, 0));
+        vp.setBounds (r);
+        layoutStrips();
+    }
+
+private:
+    void timerCallback() override
+    {
+        bool same = known.size() == eng.tracks.size();
+        for (size_t i = 0; same && i < known.size(); ++i)
+            same = known[i] == eng.tracks[i].get();
+
+        if (! same) { rebuild(); return; }
+        for (auto& s : strips) s->refresh();
+    }
+
+    void rebuild()
+    {
+        strips.clear();
+        known.clear();
+        for (auto& t : eng.tracks)
+        {
+            known.push_back (t.get());
+            auto s = std::make_unique<MixerStrip> (eng, t.get(), onSend, onMaster);
+            holder.addAndMakeVisible (*s);
+            strips.push_back (std::move (s));
+        }
+        auto m = std::make_unique<MixerStrip> (eng, nullptr, onSend, onMaster);
+        holder.addAndMakeVisible (*m);
+        strips.push_back (std::move (m));
+        layoutStrips();
+    }
+
+    void layoutStrips()
+    {
+        const int h = jmax (220, vp.getHeight() - vp.getScrollBarThickness());
+        int x = 0;
+        for (size_t i = 0; i < strips.size(); ++i)
+        {
+            if (i + 1 == strips.size()) x += 12;       // el Master va separado, al final
+            strips[i]->setBounds (x, 0, MixerStrip::stripW, h);
+            x += MixerStrip::stripW + 2;
+        }
+        holder.setSize (x, h);
+    }
+
+    Engine& eng;
+    std::function<void (Track&, Component&)> onSend;
+    std::function<void (double)> onMaster;
+    std::vector<Track*> known;
+    TextButton btnAddBus;
+    Label hint;
+    std::vector<std::unique_ptr<MixerStrip>> strips;     // antes que 'holder' y 'vp'
+    Component holder;
+    Viewport vp;
+};
+
+// Cuadro de selección (arrastrar con el botón izquierdo en un espacio vacío): rectángulo naranja translúcido
+class MarqueeOverlay : public Component
+{
+public:
+    MarqueeOverlay() { setInterceptsMouseClicks (false, false); }
+
+    void setRect (Rectangle<int> r)
+    {
+        const auto dirty = rect.getUnion (r).expanded (3);
+        rect = r;
+        repaint (dirty);
+    }
+
+    void paint (Graphics& g) override
+    {
+        if (rect.isEmpty()) return;
+        g.setColour (Colour (0xffd08a2e).withAlpha (0.18f));
+        g.fillRect (rect);
+        g.setColour (Colour (0xffd08a2e).withAlpha (0.95f));
+        g.drawRect (rect, 1);
+    }
+
+private:
+    Rectangle<int> rect;
 };
 
 // ---------------------------------------------------------------------------
@@ -1845,7 +2248,8 @@ public:
         mk (bStop, "Stop", [this] { doStop(); });
         mk (bRec,  "Rec",  [this] { doRecord(); });
         mk (bAdd,  T ("+ Pista"), [this] { addNewTrack (false); });
-        mk (bAddBus, "+ Bus", [this] { addNewTrack (true); });
+        mk (bAddBus, T ("+ Bus de envío"), [this] { addNewTrack (true); });
+        mk (bMixer, "Mezclador", [this] { showMixer(); });
         mk (bImport, "Importar", [this] { importAudio(); });
         mk (bZoomOut, "-", [this] { setZoom (pxPerSec / 1.25); });
         mk (bZoomIn, "+", [this] { setZoom (pxPerSec * 1.25); });
@@ -1950,6 +2354,7 @@ public:
         content.addAndMakeVisible (masterRow);
         content.addAndMakeVisible (selOverlay);
         content.addAndMakeVisible (loopOverlay);
+        content.addAndMakeVisible (marquee);
         content.addAndMakeVisible (playhead);
 
         setWantsKeyboardFocus (true);
@@ -1961,6 +2366,7 @@ public:
     {
         stopTimer();
         envWindow.reset();
+        mixerWindow.reset();
         windows.clear();      // cerrar editores antes de destruir los plugins
         rows.clear();
     }
@@ -2006,8 +2412,57 @@ public:
     {
         selTrack = t;
         selClip = c;
+        selClips.clear();
+        if (c != nullptr) selClips.push_back (c);
         repaintRows();
     }
+
+    bool isClipSelected (const Clip* c) const override
+    {
+        return std::find (selClips.begin(), selClips.end(), c) != selClips.end();
+    }
+
+    int selectionCount() const override { return (int) selClips.size(); }
+
+    // --- mover varios clips a la vez (selección con cuadro) ---
+    void groupDragBegin() override
+    {
+        groupOrig.clear();
+        for (auto* c : selClips) groupOrig.push_back ({ c, c->startSample.load() });
+    }
+
+    void groupDragTo (int64 delta) override
+    {
+        int64 minStart = std::numeric_limits<int64>::max();
+        for (auto& go : groupOrig) minStart = jmin (minStart, go.second);
+        delta = jmax (delta, -minStart);                  // ninguno pasa de la posición 0
+        for (auto& go : groupOrig) go.first->startSample = go.second + delta;
+        repaintRows();
+    }
+
+    void groupDragEnd() override
+    {
+        engine.undoEnd();         // si no se movió nada, no queda paso de deshacer
+        clipsChanged();
+    }
+
+    // --- cuadro de selección: arrastra con el izquierdo en un espacio vacío de la pista ---
+    void marqueeBegin (Point<int> screenPos) override
+    {
+        marqueeOrigin = content.getLocalPoint (nullptr, screenPos);
+        marquee.setRect ({});
+    }
+
+    void marqueeDrag (Point<int> screenPos) override
+    {
+        const auto p = content.getLocalPoint (nullptr, screenPos);
+        const auto r = Rectangle<int>::leftTopRightBottom (jmin (marqueeOrigin.x, p.x), jmin (marqueeOrigin.y, p.y),
+                                                           jmax (marqueeOrigin.x, p.x), jmax (marqueeOrigin.y, p.y));
+        marquee.setRect (r);
+        selectInRect (r);
+    }
+
+    void marqueeEnd() override { marquee.setRect ({}); }      // la selección se queda marcada en naranja
 
     void setLoopFromClip (Clip& c) override
     {
@@ -2077,6 +2532,32 @@ public:
             addTrackRow (engine.addTrack ("Pista " + String (rows.size() + 1)));
         }
         layoutContent();
+
+        // bus nuevo: se desplaza hasta él y se deja el nombre listo para escribir (Reverb, Delay, Coro...)
+        if (isBus && ! rows.empty())
+        {
+            auto& rw = *rows.back();
+            viewport.setViewPosition (viewport.getViewPositionX(), jmax (0, rw.getY() - 40));
+            rw.beginRename();
+        }
+    }
+
+    void showMixer()
+    {
+        if (mixerWindow != nullptr) { mixerWindow->toFront (true); return; }
+
+        SafePointer<MainComponent> sp (this);
+        auto sendFn = [sp] (Track& t, Component& src) { if (auto* self = sp.getComponent()) self->showSendPanel (t, src); };
+        auto masterFn = [sp] (double db) { if (auto* self = sp.getComponent()) self->master.setValue (db, dontSendNotification); };
+        auto addFn = [sp] { if (auto* self = sp.getComponent()) self->addNewTrack (true); };
+
+        mixerWindow = std::make_unique<EnvelopeWindow> (T ("Mezclador"), new MixerPanel (engine, sendFn, masterFn, addFn), [sp]
+        {
+            MessageManager::callAsync ([sp]
+            {
+                if (auto* self = sp.getComponent()) self->mixerWindow.reset();
+            });
+        });
     }
 
     void removeTrack (Track& t) override
@@ -2424,9 +2905,9 @@ public:
         bLoop.setBounds (bar2.removeFromLeft (60));
         bar2.removeFromLeft (10);
 
-        for (auto* b : { &bAdd, &bAddBus, &bImport, &bZoomOut, &bZoomIn })
+        for (auto* b : { &bAdd, &bAddBus, &bMixer, &bImport, &bZoomOut, &bZoomIn })
         {
-            b->setBounds (bar2.removeFromLeft ((b == &bZoomOut || b == &bZoomIn) ? 34 : 76));
+            b->setBounds (bar2.removeFromLeft ((b == &bZoomOut || b == &bZoomIn) ? 34 : (b == &bAddBus ? 112 : 76)));
             bar2.removeFromLeft (3);
         }
 
@@ -2587,6 +3068,7 @@ private:
 
         selOverlay.setBounds (content.getLocalBounds());
         loopOverlay.setBounds (content.getLocalBounds());
+        marquee.setBounds (content.getLocalBounds());
         loopOverlay.toFront (false);
         playhead.toFront (false);
         content.repaint();
@@ -2643,12 +3125,44 @@ private:
     // Si el clip seleccionado ya no existe (borrado, dividido...), se quita la selección.
     void validateSelection()
     {
-        if (selClip == nullptr) return;
+        selClips.erase (std::remove_if (selClips.begin(), selClips.end(), [this] (Clip* c) { return trackOf (c) == nullptr; }),
+                        selClips.end());
+        if (selClip != nullptr && trackOf (selClip) == nullptr) { selClip = nullptr; selTrack = nullptr; }
+        if (selClip == nullptr && ! selClips.empty()) { selClip = selClips.front(); selTrack = trackOf (selClip); }
+    }
+
+    // pista a la que pertenece un clip (nullptr si ya no existe)
+    Track* trackOf (Clip* want) const
+    {
         for (auto& t : engine.tracks)
             for (auto& c : t->clips)
-                if (c.get() == selClip) return;
-        selTrack = nullptr;
+                if (c.get() == want) return t.get();
+        return nullptr;
+    }
+
+    // Selecciona todos los clips que toca el rectángulo (en coordenadas del contenido)
+    void selectInRect (Rectangle<int> r)
+    {
+        selClips.clear();
         selClip = nullptr;
+        selTrack = nullptr;
+
+        for (auto& row : rows)
+        {
+            const int y0 = row->getY() + 4, y1 = row->getY() + ui::rowH - 4;
+            if (r.getBottom() < y0 || r.getY() > y1) continue;
+
+            for (auto& c : row->getTrack().clips)
+            {
+                const int x0 = ui::headerW + (int) ((double) c->startSample.load() / engine.sampleRate * pxPerSec);
+                const int x1 = x0 + jmax (2, (int) ((double) c->audio.getNumSamples() / engine.sampleRate * pxPerSec));
+                if (r.getRight() < x0 || r.getX() > x1) continue;
+
+                selClips.push_back (c.get());
+                if (selClip == nullptr) { selClip = c.get(); selTrack = &row->getTrack(); }
+            }
+        }
+        repaintRows();
     }
 
     void doUndo()
@@ -2673,35 +3187,54 @@ private:
         selOverlay.repaint();
     }
 
+    // Ctrl+B: copia el/los audio(s) seleccionado(s) justo después del grupo, cada uno en su pista
     void duplicateSelectedClip()
     {
         validateSelection();
-        if (selClip == nullptr || selTrack == nullptr || ! engine.hasTrack (selTrack))
+        if (selClips.empty())
         {
             setStatus (T ("Selecciona un audio (clic sobre él) y pulsa Ctrl+B para copiarlo"));
             return;
         }
 
-        const int64 at = selClip->startSample.load() + selClip->audio.getNumSamples();
-        auto* copy = engine.duplicateClip (*selTrack, selClip, at, true);
-        selClip = copy;                  // la copia queda seleccionada: Ctrl+B otra vez sigue copiando hacia adelante
+        int64 minStart = std::numeric_limits<int64>::max(), maxEnd = 0;
+        for (auto* c : selClips)
+        {
+            minStart = jmin (minStart, c->startSample.load());
+            maxEnd = jmax (maxEnd, c->startSample.load() + (int64) c->audio.getNumSamples());
+        }
+        const int64 shift = maxEnd - minStart;
+
+        engine.undoBegin();                  // todas las copias = un solo paso de Ctrl+Z
+        ++engine.undoSuspend;
+        std::vector<Clip*> copies;
+        for (auto* c : selClips)
+            if (auto* t = trackOf (c))
+                if (auto* cp = engine.duplicateClip (*t, c, c->startSample.load() + shift, false))
+                    copies.push_back (cp);
+        --engine.undoSuspend;
+
+        selClips = copies;                   // las copias quedan seleccionadas: Ctrl+B otra vez sigue copiando
+        selClip = copies.empty() ? nullptr : copies.front();
+        selTrack = selClip != nullptr ? trackOf (selClip) : nullptr;
         clipsChanged();
-        setStatus (T ("Audio copiado"));
+        setStatus (copies.size() > 1 ? T ("Audios copiados") : T ("Audio copiado"));
     }
 
     void deleteSelectedClip()
     {
-        if (selClip == nullptr || selTrack == nullptr || ! engine.hasTrack (selTrack)) return;
+        validateSelection();
+        if (selClips.empty()) return;
 
-        for (auto& c : selTrack->clips)
-            if (c.get() == selClip)
-            {
-                engine.removeClip (*selTrack, selClip);
-                selTrack = nullptr;
-                selClip = nullptr;
-                clipsChanged();
-                return;
-            }
+        engine.undoBegin();                  // borrar varios = un solo paso de Ctrl+Z
+        ++engine.undoSuspend;
+        for (auto* c : selClips)
+            if (auto* t = trackOf (c))
+                engine.removeClip (*t, c);
+        --engine.undoSuspend;
+
+        setSelected (nullptr, nullptr);
+        clipsChanged();
     }
 
     void setStatus (const String& s)
@@ -2745,6 +3278,7 @@ private:
     {
         selTrack = nullptr;
         selClip = nullptr;
+        selClips.clear();
         envWindow.reset();
         windows.clear();
         rows.clear();
@@ -3079,19 +3613,21 @@ private:
     std::vector<std::unique_ptr<TrackRow>> rows;
 
     std::unique_ptr<EnvelopeWindow> envWindow;           // panel de envolventes abierto (si hay)
+    std::unique_ptr<EnvelopeWindow> mixerWindow;         // mezclador abierto (si hay)
 
     TimelineContent content;
     AddTrackArea addArea;
     MasterRow masterRow { engine, *this };
     SelectionOverlay selOverlay { engine, [this] { return pxPerSec; } };
     LoopOverlay loopOverlay { engine, [this] { return pxPerSec; } };
+    MarqueeOverlay marquee;
     Playhead playhead;
     Viewport viewport;
     BottomBar bottomBar { engine };
     DropOverlay dropOverlay;
     bool wasPlaying = false;
 
-    TextButton bHome, bPlay, bStop, bRec, bAdd, bAddBus, bImport, bZoomOut, bZoomIn, bAudio, bScan, bReport, bOpen, bSave;
+    TextButton bHome, bPlay, bStop, bRec, bAdd, bAddBus, bMixer, bImport, bZoomOut, bZoomIn, bAudio, bScan, bReport, bOpen, bSave;
     TextButton bSelect, bHand, bCut, bLoop, bMasterFx;
     Label timeLabel, bpmLabel, gridLabel, statusLabel;
     Slider master, bpmSlider;
@@ -3099,7 +3635,10 @@ private:
 
     int tool = ui::toolSelect;
     Track* selTrack = nullptr;
-    Clip* selClip = nullptr;
+    Clip* selClip = nullptr;                              // el clip principal de la selección
+    std::vector<Clip*> selClips;                          // todos los clips seleccionados (uno o varios con el cuadro)
+    std::vector<std::pair<Clip*, int64>> groupOrig;       // posición inicial de cada clip al mover el grupo
+    Point<int> marqueeOrigin;
     File currentProject;
     int statusTicks = 0;
     int64 lastLoopS = -1, lastLoopE = -1;

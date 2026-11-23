@@ -114,13 +114,16 @@ struct Track
     // Buses y envíos
     std::atomic<bool> isBus { false };                 // true = pista de bus (recibe audio de otras pistas)
     std::atomic<Track*> outputBus { nullptr };         // a qué bus va la salida (nullptr = Master)
-    std::atomic<Track*> sendTarget[2];                 // 2 envíos post-fader
-    std::atomic<float> sendLevel[2];
 
-    Track()
+    // Envíos post-fader: una pista o un bus puede enviar a cualquier número de buses (un envío por bus destino).
+    // La lista solo se cambia con el lock del Engine tomado; el nivel es atómico (se mueve sin lock).
+    struct Send
     {
-        for (int i = 0; i < 2; ++i) { sendTarget[i] = nullptr; sendLevel[i] = 0.0f; }
-    }
+        std::atomic<Track*> target { nullptr };
+        std::atomic<float> level { 0.0f };
+    };
+    std::vector<std::unique_ptr<Send>> sends;
+    int busRank = -1;                                  // orden de proceso del bus (solo con el lock): un bus solo envía a rangos mayores
 
     AudioBuffer<float> buf;                   // 8 canales de trabajo
     std::unique_ptr<AudioFormatWriter::ThreadedWriter> writer;
@@ -166,6 +169,7 @@ public:
         auto* raw = t.get();
         const SpinLock::ScopedLockType sl (lock);
         tracks.push_back (std::move (t));
+        rebuildBusOrder();
         return raw;
     }
 
@@ -182,11 +186,13 @@ public:
                     for (auto& o : tracks)
                     {
                         if (o->outputBus.load() == t) o->outputBus = nullptr;
-                        for (int s = 0; s < 2; ++s)
-                            if (o->sendTarget[s].load() == t) o->sendTarget[s] = nullptr;
+                        for (size_t k = o->sends.size(); k-- > 0;)
+                            if (o->sends[k]->target.load() == t)
+                                o->sends.erase (o->sends.begin() + (long) k);
                     }
                     dead = std::move (tracks[i]);
                     tracks.erase (tracks.begin() + (long) i);
+                    rebuildBusOrder();
                     break;
                 }
         }
@@ -211,6 +217,98 @@ public:
         std::vector<Track*> v;
         for (auto& t : tracks) if (t->isBus.load()) v.push_back (t.get());
         return v;
+    }
+
+    // ------------------------ Envíos entre pistas y buses -------------------
+    // ¿Puede 'from' enviar a 'to'? No si 'to' no es un bus, si es el mismo, o si 'to' ya le envía (directa o
+    // indirectamente) a 'from': eso sería un lazo de realimentación infinito.
+    bool canSend (const Track* from, const Track* to) const
+    {
+        if (from == nullptr || to == nullptr || from == to || ! to->isBus.load()) return false;
+        return ! reaches (to, from);
+    }
+
+    // Nivel (ganancia lineal) del envío from -> to; 0 si no hay envío.
+    float getSendLevel (const Track* from, const Track* to) const
+    {
+        for (auto& s : from->sends)
+            if (s->target.load() == to) return s->level.load();
+        return 0.0f;
+    }
+
+    // Pone el nivel del envío from -> to (0 = quitar el envío). Devuelve false si no está permitido (lazo).
+    bool setSendLevel (Track* from, Track* to, float level)
+    {
+        if (level <= 0.0f)
+        {
+            const SpinLock::ScopedLockType sl (lock);
+            for (size_t k = from->sends.size(); k-- > 0;)
+                if (from->sends[k]->target.load() == to)
+                    from->sends.erase (from->sends.begin() + (long) k);
+            rebuildBusOrder();
+            return true;
+        }
+
+        if (! canSend (from, to)) return false;
+
+        for (auto& s : from->sends)
+            if (s->target.load() == to) { s->level = level; return true; }   // ya existe: solo el nivel (sin lock)
+
+        auto ns = std::make_unique<Track::Send>();
+        ns->target = to;
+        ns->level = level;
+        const SpinLock::ScopedLockType sl (lock);
+        from->sends.push_back (std::move (ns));
+        rebuildBusOrder();
+        return true;
+    }
+
+    // ¿Hay camino de envíos de 'a' hasta 'b'? (siguiendo solo buses)
+    bool reaches (const Track* a, const Track* b, int depth = 0) const
+    {
+        if (a == b) return true;
+        if (depth > 64) return true;                  // red absurdamente profunda: se trata como lazo
+        for (auto& s : a->sends)
+            if (auto* nx = s->target.load())
+                if (reaches (nx, b, depth + 1)) return true;
+        return false;
+    }
+
+    // Ordena los buses para que cada uno se procese DESPUÉS de todos los que le envían (con el lock tomado).
+    void rebuildBusOrder()
+    {
+        std::vector<Track*> pending, order;
+        for (auto& t : tracks)
+        {
+            t->busRank = -1;
+            if (t->isBus.load()) pending.push_back (t.get());
+        }
+
+        while (! pending.empty())
+        {
+            bool progressed = false;
+            for (size_t i = 0; i < pending.size();)
+            {
+                Track* cand = pending[i];
+                bool fed = false;
+                for (auto* o : pending)
+                    if (o != cand)
+                        for (auto& s : o->sends)
+                            if (s->target.load() == cand) fed = true;
+
+                if (! fed)
+                {
+                    order.push_back (cand);
+                    pending.erase (pending.begin() + (long) i);
+                    progressed = true;
+                }
+                else ++i;
+            }
+            if (! progressed) { for (auto* p : pending) order.push_back (p); break; }   // lazo (no debería pasar)
+        }
+
+        for (size_t i = 0; i < order.size(); ++i) order[i]->busRank = (int) i;
+        busOrder = std::move (order);
     }
 
     // ------------------------------ Clips ----------------------------------
@@ -976,10 +1074,11 @@ public:
             te->setAttribute ("monitor", t->monitor.load());
             te->setAttribute ("bus", t->isBus.load());
             te->setAttribute ("out", indexOf (t->outputBus.load()));
-            for (int s = 0; s < 2; ++s)
+            for (auto& sd : t->sends)
             {
-                te->setAttribute ("send" + String (s), indexOf (t->sendTarget[s].load()));
-                te->setAttribute ("lvl" + String (s), (double) t->sendLevel[s].load());
+                auto* se = te->createNewChildElement ("SEND");
+                se->setAttribute ("to", indexOf (sd->target.load()));
+                se->setAttribute ("level", (double) sd->level.load());
             }
 
             for (auto& c : t->clips)
@@ -1061,6 +1160,7 @@ public:
             {
                 const SpinLock::ScopedLockType sl (lock);
                 old.swap (tracks);
+                busOrder.clear();      // apuntaba a las pistas viejas
             }
         }   // pistas viejas destruidas aquí
 
@@ -1171,11 +1271,13 @@ public:
             auto* te = trackXml[i];
             auto& t = *tracks[i];
             t.outputBus = at (te->getIntAttribute ("out", -1));
+            // envíos nuevos (<SEND to= level=>) y, para proyectos viejos, send0/lvl0 y send1/lvl1
+            for (auto* se : te->getChildWithTagNameIterator ("SEND"))
+                setSendLevel (&t, at (se->getIntAttribute ("to", -1)), (float) se->getDoubleAttribute ("level", 0.0));
             for (int s = 0; s < 2; ++s)
-            {
-                t.sendTarget[s] = at (te->getIntAttribute ("send" + String (s), -1));
-                t.sendLevel[s] = (float) te->getDoubleAttribute ("lvl" + String (s), 0.0);
-            }
+                if (te->hasAttribute ("send" + String (s)))
+                    setSendLevel (&t, at (te->getIntAttribute ("send" + String (s), -1)),
+                                  (float) te->getDoubleAttribute ("lvl" + String (s), 0.0));
         }
 
         std::vector<AudioPluginInstance*> origMaster;
@@ -1281,9 +1383,13 @@ public:
         for (auto& t : tracks)
             if (t->isBus.load()) t->buf.clear (0, n);
 
+        // pasada 0 = pistas normales; pasada 1 = buses en orden (un bus se procesa después de los que le envían)
+        const int nTracks = (int) tracks.size();
+        const int nBuses = (int) busOrder.size();
         for (int pass = 0; pass < 2; ++pass)
-        for (auto& t : tracks)
+        for (int ti = 0, tcount = (pass == 0 ? nTracks : nBuses); ti < tcount; ++ti)
         {
+            Track* const t = pass == 0 ? tracks[(size_t) ti].get() : busOrder[(size_t) ti];
             const bool bus = t->isBus.load();
             if (bus != (pass == 1)) continue;
 
@@ -1364,22 +1470,22 @@ public:
             t->peakL = jmax (b.getMagnitude (0, 0, n), t->peakL.load() * 0.85f);
             t->peakR = jmax (b.getMagnitude (1, 0, n), t->peakR.load() * 0.85f);
 
-            // Envíos (post-fader) hacia buses
-            if (! bus)
-                for (int s = 0; s < 2; ++s)
+            // Envíos (post-fader) hacia buses. Las pistas y también los buses pueden enviar; un bus solo envía a
+            // buses que se procesan después de él (busRank mayor): así nunca hay realimentación.
+            for (auto& sd : t->sends)
+            {
+                Track* st = sd->target.load();
+                const float lvl = sd->level.load();
+                if (st != nullptr && st != t && st->isBus.load() && lvl > 0.0f && st->busRank > t->busRank)
                 {
-                    Track* st = t->sendTarget[s].load();
-                    const float lvl = t->sendLevel[s].load();
-                    if (st != nullptr && st != t.get() && st->isBus.load() && lvl > 0.0f)
-                    {
-                        st->buf.addFrom (0, 0, b, 0, 0, n, lvl);
-                        st->buf.addFrom (1, 0, b, 1, 0, n, lvl);
-                    }
+                    st->buf.addFrom (0, 0, b, 0, 0, n, lvl);
+                    st->buf.addFrom (1, 0, b, 1, 0, n, lvl);
                 }
+            }
 
             // Salida: a un bus o al Master
             Track* o = bus ? nullptr : t->outputBus.load();
-            if (o != nullptr && o != t.get() && o->isBus.load())
+            if (o != nullptr && o != t && o->isBus.load())
             {
                 o->buf.addFrom (0, 0, b, 0, 0, n);
                 o->buf.addFrom (1, 0, b, 1, 0, n);
@@ -1680,6 +1786,7 @@ private:
         }
     }
 
+    std::vector<Track*> busOrder;      // buses en orden de proceso (solo con el lock)
     float lastMasterG = -1.0f;
     SpinLock lock;
     AudioBuffer<float> mix;
