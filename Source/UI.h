@@ -1659,6 +1659,456 @@ private:
     Viewport vp;
 };
 
+// ---------------------------------------------------------------------------
+// Ventana de FX (como REAPER): bypass por plugin, Bypass All, subir/bajar (flechas y arrastrando),
+// clic derecho -> Reemplazar / Abrir / Quitar. El plugin de arriba procesa primero.
+// ---------------------------------------------------------------------------
+struct FxCallbacks
+{
+    std::function<void (AudioPluginInstance&)> open;
+    std::function<void()> add;
+    std::function<void (int)> replace;
+    std::function<void (int)> remove;
+    std::function<void()> automation;
+};
+
+class FxBody : public Component
+{
+public:
+    int dropLine = -1;
+    static constexpr int rowH = 32;
+
+    void paintOverChildren (Graphics& g) override
+    {
+        if (dropLine < 0) return;
+        g.setColour (Colour (0xffd08a2e));
+        g.fillRect (0, dropLine * rowH - 1, getWidth(), 3);
+    }
+};
+
+class FxChainPanel : public Component, private Timer
+{
+public:
+    FxChainPanel (Engine& e, Track* t, FxCallbacks cb) : eng (e), track (t), cbs (std::move (cb))
+    {
+        btnAll.setButtonText (T ("Bypass All"));
+        btnAll.setTooltip (T ("Apaga todos los efectos a la vez; otra vez los vuelve a prender"));
+        btnAll.setColour (TextButton::buttonOnColourId, Colour (0xffb03030));
+        btnAll.onClick = [this] { eng.setAllFxOff (track, ! eng.allFxOff (track)); refreshState(); };
+        addAndMakeVisible (btnAll);
+
+        btnAdd.setButtonText (T ("+ Añadir FX"));
+        btnAdd.onClick = [this] { if (cbs.add) cbs.add(); };
+        addAndMakeVisible (btnAdd);
+
+        btnAuto.setButtonText (T ("Automatización..."));
+        btnAuto.onClick = [this] { if (cbs.automation) cbs.automation(); };
+        addAndMakeVisible (btnAuto);
+
+        hint.setText (T ("Arrastra un efecto para cambiar su orden (el de arriba procesa primero) · clic derecho: Reemplazar"),
+                      dontSendNotification);
+        hint.setFont (Font (FontOptions (11.0f)));
+        hint.setColour (Label::textColourId, Colours::grey);
+        addAndMakeVisible (hint);
+
+        vp.setViewedComponent (&body, false);
+        vp.setScrollBarsShown (true, false);
+        addAndMakeVisible (vp);
+
+        setSize (460, 340);
+        rebuild();
+        startTimerHz (15);
+    }
+
+    ~FxChainPanel() override { stopTimer(); }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (6);
+        auto top = r.removeFromTop (28);
+        btnAll.setBounds (top.removeFromLeft (100));
+        top.removeFromLeft (6);
+        btnAdd.setBounds (top.removeFromLeft (100));
+        top.removeFromLeft (6);
+        btnAuto.setBounds (top.removeFromLeft (130));
+        r.removeFromTop (4);
+        hint.setBounds (r.removeFromBottom (30));
+        vp.setBounds (r);
+        layoutRows();
+    }
+
+    void paint (Graphics& g) override { g.fillAll (Colour (0xff202020)); }
+
+private:
+    struct Row : public Component
+    {
+        Row (FxChainPanel& o, int i, AudioPluginInstance& p) : owner (o), index (i), plugin (&p)
+        {
+            bypass.setClickingTogglesState (false);
+            bypass.setTooltip (T ("Prender / apagar este efecto (bypass)"));
+            bypass.onClick = [this] { owner.eng.setFxOff (owner.track, plugin, ! owner.eng.isFxOff (owner.track, plugin)); update(); };
+            addAndMakeVisible (bypass);
+
+            name.setText (String (i + 1) + ".  " + p.getName(), dontSendNotification);
+            name.setInterceptsMouseClicks (false, false);
+            addAndMakeVisible (name);
+
+            up.setButtonText (CharPointer_UTF8 ("\xE2\x96\xB2"));
+            up.setTooltip (T ("Subir"));
+            up.onClick = [this] { owner.eng.movePlugin (owner.track, index, index - 1); };
+            addAndMakeVisible (up);
+
+            down.setButtonText (CharPointer_UTF8 ("\xE2\x96\xBC"));
+            down.setTooltip (T ("Bajar"));
+            down.onClick = [this] { owner.eng.movePlugin (owner.track, index, index + 1); };
+            addAndMakeVisible (down);
+
+            open.setButtonText (T ("Abrir"));
+            open.onClick = [this] { if (owner.cbs.open) owner.cbs.open (*plugin); };
+            addAndMakeVisible (open);
+
+            del.setButtonText ("x");
+            del.setTooltip (T ("Quitar"));
+            del.onClick = [this] { if (owner.cbs.remove) owner.cbs.remove (index); };
+            addAndMakeVisible (del);
+
+            up.setEnabled (i > 0);
+            down.setEnabled (i + 1 < (int) owner.chainSize());
+            update();
+        }
+
+        void update()
+        {
+            const bool off = owner.eng.isFxOff (owner.track, plugin);
+            bypass.setButtonText (off ? "OFF" : "ON");
+            bypass.setColour (TextButton::buttonColourId, off ? Colour (0xff7a2a2a) : Colour (0xff2e9d4f));
+            bypass.setColour (TextButton::textColourOffId, Colours::white);
+            name.setColour (Label::textColourId, off ? Colours::grey : Colours::white);
+            repaint();
+        }
+
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (3, 3);
+            bypass.setBounds (r.removeFromLeft (44));
+            r.removeFromLeft (4);
+            del.setBounds (r.removeFromRight (26));
+            open.setBounds (r.removeFromRight (52));
+            down.setBounds (r.removeFromRight (26));
+            up.setBounds (r.removeFromRight (26));
+            name.setBounds (r);
+        }
+
+        void paint (Graphics& g) override
+        {
+            const bool off = owner.eng.isFxOff (owner.track, plugin);
+            g.setColour (dragging ? Colour (0xff3d5a80) : (off ? Colour (0xff262626) : Colour (0xff303a30)));
+            g.fillRoundedRectangle (getLocalBounds().reduced (1).toFloat(), 4.0f);
+        }
+
+        void mouseDown (const MouseEvent& e) override
+        {
+            if (e.mods.isPopupMenu()) { owner.showRowMenu (index); return; }
+            dragging = false;
+        }
+
+        void mouseDrag (const MouseEvent& e) override
+        {
+            if (e.mods.isPopupMenu() || e.getDistanceFromDragStart() < 4) return;
+            if (! dragging) { dragging = true; repaint(); }
+            owner.dragTo (e.getEventRelativeToComponent (&owner.body).y);
+        }
+
+        void mouseUp (const MouseEvent& e) override
+        {
+            if (dragging) { dragging = false; owner.dropFrom (index); }
+            juce::ignoreUnused (e);
+        }
+
+        FxChainPanel& owner;
+        int index;
+        AudioPluginInstance* plugin;
+        bool dragging = false;
+        TextButton bypass, up, down, open, del;
+        Label name;
+    };
+
+    size_t chainSize() { return eng.pluginsOf (track).size(); }
+
+    void timerCallback() override
+    {
+        auto& list = eng.pluginsOf (track);
+        bool same = known.size() == list.size();
+        for (size_t i = 0; same && i < known.size(); ++i)
+            same = known[i] == list[i].get();
+
+        if (! same) rebuild();
+        else refreshState();
+    }
+
+    void refreshState()
+    {
+        for (auto& r : rows) r->update();
+        const bool all = eng.allFxOff (track);
+        btnAll.setToggleState (all, dontSendNotification);
+        btnAll.setButtonText (all ? T ("Encender todos") : T ("Bypass All"));
+    }
+
+    void rebuild()
+    {
+        rows.clear();
+        known.clear();
+        int i = 0;
+        for (auto& p : eng.pluginsOf (track))
+        {
+            known.push_back (p.get());
+            auto row = std::make_unique<Row> (*this, i++, *p);
+            body.addAndMakeVisible (*row);
+            rows.push_back (std::move (row));
+        }
+        layoutRows();
+        refreshState();
+    }
+
+    void layoutRows()
+    {
+        const int w = jmax (100, vp.getWidth() - vp.getScrollBarThickness());
+        for (size_t i = 0; i < rows.size(); ++i)
+            rows[i]->setBounds (0, (int) i * FxBody::rowH, w, FxBody::rowH);
+        body.setSize (w, jmax (FxBody::rowH, (int) rows.size() * FxBody::rowH));
+    }
+
+    void dragTo (int bodyY)
+    {
+        body.dropLine = jlimit (0, (int) rows.size(), (bodyY + FxBody::rowH / 2) / FxBody::rowH);
+        body.repaint();
+    }
+
+    void dropFrom (int from)
+    {
+        const int line = body.dropLine;
+        body.dropLine = -1;
+        body.repaint();
+        if (line < 0) return;
+        const int to = line > from ? line - 1 : line;
+        if (to != from) eng.movePlugin (track, from, to);      // la lista se redibuja sola (timer)
+    }
+
+    void showRowMenu (int idx)
+    {
+        PopupMenu m;
+        m.addItem (1, T ("Reemplazar..."));
+        m.addItem (2, T ("Abrir"));
+        m.addItem (3, T ("Subir"), idx > 0);
+        m.addItem (4, T ("Bajar"), idx + 1 < (int) rows.size());
+        m.addSeparator();
+        m.addItem (5, T ("Quitar"));
+
+        SafePointer<FxChainPanel> sp (this);
+        m.showMenuAsync (PopupMenu::Options(), [sp, idx] (int r)
+        {
+            auto* self = sp.getComponent();
+            if (self == nullptr || r == 0 || idx >= (int) self->known.size()) return;
+            if (r == 1 && self->cbs.replace) self->cbs.replace (idx);
+            else if (r == 2 && self->cbs.open) self->cbs.open (*self->eng.pluginsOf (self->track)[(size_t) idx]);
+            else if (r == 3) self->eng.movePlugin (self->track, idx, idx - 1);
+            else if (r == 4) self->eng.movePlugin (self->track, idx, idx + 1);
+            else if (r == 5 && self->cbs.remove) self->cbs.remove (idx);
+        });
+    }
+
+    Engine& eng;
+    Track* track;
+    FxCallbacks cbs;
+    std::vector<AudioPluginInstance*> known;
+    TextButton btnAll, btnAdd, btnAuto;
+    Label hint;
+    std::vector<std::unique_ptr<Row>> rows;      // antes que 'body' y 'vp'
+    FxBody body;
+    Viewport vp;
+};
+
+// ---------------------------------------------------------------------------
+// Ventana de exportar (WAV / MP3, calidad, destino, rango, Master o pistas por separado)
+// ---------------------------------------------------------------------------
+class ExportDialog : public Component
+{
+public:
+    ExportDialog (Engine::ExportSettings init, bool hasSelection, std::function<void (const Engine::ExportSettings&)> goFn)
+        : st (std::move (init)), go (std::move (goFn))
+    {
+        auto lab = [this] (Label& l, const String& t) { l.setText (t, dontSendNotification); addAndMakeVisible (l); };
+        lab (lFmt, T ("Formato"));  lab (lQ, T ("Calidad")); lab (lSr, T ("Frecuencia")); lab (lRange, T ("Rango"));
+        lab (lMode, T ("Contenido")); lab (lName, T ("Nombre")); lab (lFolder, T ("Carpeta"));
+
+        fmt.addItem ("WAV", 1);
+        fmt.addItem ("MP3", 2);
+        fmt.setSelectedId (st.mp3 ? 2 : 1, dontSendNotification);
+        fmt.onChange = [this] { fillQuality (true); };
+        addAndMakeVisible (fmt);
+
+        addAndMakeVisible (quality);
+        fillQuality (false);
+
+        sr.addItem ("44100 Hz", 44100);
+        sr.addItem ("48000 Hz", 48000);
+        sr.setSelectedId (st.sampleRate == 48000 ? 48000 : 44100, dontSendNotification);
+        addAndMakeVisible (sr);
+
+        range.addItem (T ("Toda la canción"), 1);
+        range.addItem (T ("Selección de tiempo"), 2);
+        range.setItemEnabled (2, hasSelection);
+        range.setSelectedId (st.useSelection && hasSelection ? 2 : 1, dontSendNotification);
+        addAndMakeVisible (range);
+
+        mode.addItem (T ("Mezcla final (Master)"), 1);
+        mode.addItem (T ("Pista por pista (stems)"), 2);
+        mode.setSelectedId (st.stems ? 2 : 1, dontSendNotification);
+        addAndMakeVisible (mode);
+
+        name.setText (st.baseName, dontSendNotification);
+        addAndMakeVisible (name);
+        folder.setText (st.folder.getFullPathName(), dontSendNotification);
+        addAndMakeVisible (folder);
+
+        browse.setButtonText ("...");
+        browse.onClick = [this]
+        {
+            chooser = std::make_unique<FileChooser> (T ("Carpeta de destino"), File (folder.getText()));
+            SafePointer<ExportDialog> sp (this);
+            chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
+                                  [sp] (const FileChooser& fc)
+            {
+                if (auto* self = sp.getComponent())
+                    if (fc.getResult() != File()) self->folder.setText (fc.getResult().getFullPathName(), dontSendNotification);
+            });
+        };
+        addAndMakeVisible (browse);
+
+        info.setText (T ("Incluye efectos, buses, envíos y automatización. Se añaden 2 s de cola al final."), dontSendNotification);
+        info.setFont (Font (FontOptions (11.5f)));
+        info.setColour (Label::textColourId, Colours::grey);
+        addAndMakeVisible (info);
+
+        ok.setButtonText (T ("Exportar"));
+        ok.onClick = [this] { accept(); };
+        addAndMakeVisible (ok);
+
+        cancel.setButtonText (T ("Cancelar"));
+        cancel.onClick = [this] { close(); };
+        addAndMakeVisible (cancel);
+
+        setSize (460, 330);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (14, 12);
+        auto row = [&] (Label& l, Component& c)
+        {
+            auto line = r.removeFromTop (28);
+            l.setBounds (line.removeFromLeft (90));
+            c.setBounds (line);
+            r.removeFromTop (6);
+        };
+        row (lFmt, fmt); row (lQ, quality); row (lSr, sr); row (lRange, range); row (lMode, mode); row (lName, name);
+
+        auto line = r.removeFromTop (28);
+        lFolder.setBounds (line.removeFromLeft (90));
+        browse.setBounds (line.removeFromRight (34));
+        line.removeFromRight (4);
+        folder.setBounds (line);
+        r.removeFromTop (6);
+
+        info.setBounds (r.removeFromTop (34));
+        auto btns = r.removeFromBottom (30);
+        cancel.setBounds (btns.removeFromRight (100));
+        btns.removeFromRight (8);
+        ok.setBounds (btns.removeFromRight (100));
+    }
+
+    void paint (Graphics& g) override { g.fillAll (Colour (0xff262626)); }
+
+private:
+    void fillQuality (bool resetSel)
+    {
+        const bool mp3 = fmt.getSelectedId() == 2;
+        quality.clear (dontSendNotification);
+        if (mp3)
+        {
+            for (int k : { 128, 192, 256, 320 }) quality.addItem (String (k) + " kbps", k);
+            quality.setSelectedId (resetSel || ! (st.kbps == 128 || st.kbps == 192 || st.kbps == 256 || st.kbps == 320) ? 192 : st.kbps,
+                                   dontSendNotification);
+        }
+        else
+        {
+            quality.addItem ("16 bits", 16);
+            quality.addItem ("24 bits", 24);
+            quality.setSelectedId (resetSel ? 24 : (st.bits == 16 ? 16 : 24), dontSendNotification);
+        }
+    }
+
+    void accept()
+    {
+        Engine::ExportSettings s = st;
+        s.mp3 = fmt.getSelectedId() == 2;
+        if (s.mp3) s.kbps = quality.getSelectedId(); else s.bits = quality.getSelectedId();
+        s.sampleRate = sr.getSelectedId();
+        s.useSelection = range.getSelectedId() == 2;
+        s.stems = mode.getSelectedId() == 2;
+        s.baseName = name.getText().trim();
+        s.folder = File (folder.getText().trim());
+
+        if (s.baseName.isEmpty() || folder.getText().trim().isEmpty())
+        {
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, T ("Exportar"),
+                                              T ("Escribe un nombre y elige una carpeta de destino."));
+            return;
+        }
+        auto cb = go;
+        close();
+        if (cb) cb (s);
+    }
+
+    void close()
+    {
+        if (auto* dw = findParentComponentOfClass<DialogWindow>()) dw->exitModalState (0);
+    }
+
+    Engine::ExportSettings st;
+    std::function<void (const Engine::ExportSettings&)> go;
+    Label lFmt, lQ, lSr, lRange, lMode, lName, lFolder, info;
+    ComboBox fmt, quality, sr, range, mode;
+    TextEditor name, folder;
+    TextButton browse, ok, cancel;
+    std::unique_ptr<FileChooser> chooser;
+};
+
+// Exporta en un hilo aparte con ventana de progreso (barra + botón Cancelar)
+class ExportJob : public ThreadWithProgressWindow
+{
+public:
+    ExportJob (Engine& e, Engine::ExportSettings s, std::function<void (bool, StringArray, String)> doneFn)
+        : ThreadWithProgressWindow (T ("Exportando..."), true, true, 5000, T ("Cancelar")),
+          eng (e), st (std::move (s)), done (std::move (doneFn)) {}
+
+    void run() override
+    {
+        setStatusMessage (T ("Procesando la mezcla (efectos, buses, envíos y automatización)..."));
+        ok = eng.renderExport (st, [this] (double p) { setProgress (jlimit (0.0, 1.0, p)); return ! threadShouldExit(); }, files, err);
+    }
+
+    void threadComplete (bool) override { if (done) done (ok, files, err); }
+
+private:
+    Engine& eng;
+    Engine::ExportSettings st;
+    std::function<void (bool, StringArray, String)> done;
+    bool ok = false;
+    StringArray files;
+    String err;
+};
+
 // Cuadro de selección (arrastrar con el botón izquierdo en un espacio vacío): rectángulo naranja translúcido
 class MarqueeOverlay : public Component
 {
@@ -2259,6 +2709,7 @@ public:
         mk (bOpen, "Abrir", [this] { openProject(); });
         mk (bSave, "Guardar", [this] { saveProjectQuick(); });
         mk (bMasterFx, T ("FX Master"), [this] { showMasterFxMenu(); });
+        mk (bExport, "Exportar", [this] { showExportDialog (false); });
 
         // Herramientas: Selección / Mano / Cortar
         auto mkTool = [this] (TextButton& b, const String& text, int toolId)
@@ -2366,6 +2817,7 @@ public:
     {
         stopTimer();
         envWindow.reset();
+        fxWindow.reset();
         mixerWindow.reset();
         windows.clear();      // cerrar editores antes de destruir los plugins
         rows.clear();
@@ -2563,6 +3015,7 @@ public:
     void removeTrack (Track& t) override
     {
         envWindow.reset();
+        fxWindow.reset();
         closeWindowsFor (t);
         for (size_t i = 0; i < rows.size(); ++i)
             if (&rows[i]->getTrack() == &t)
@@ -2589,75 +3042,253 @@ public:
             }
     }
 
-    void showFxMenu (Track& t) override
+    void showFxMenu (Track& t) override { openFxChain (&t); }
+
+    void timeSelectionChanged() override { selOverlay.repaint(); }
+
+    // ------------------- Ventana de FX, selector de plugins, exportar -------------------
+    File jsfxFolderFile() const
     {
-        PopupMenu m, add;
+        return File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("LaPautaStudio").getChildFile ("jsfx_folder.txt");
+    }
+
+    // Lista de plugins para añadir o reemplazar: VST3 por fabricante y JSFX (archivo suelto o carpeta).
+    // Al elegir uno se crea la instancia y se entrega a 'onPicked'. Un JSFX con error muestra la línea y no se carga.
+    void pickPlugin (std::function<void (std::unique_ptr<AudioPluginInstance>)> onPicked)
+    {
+        PopupMenu m, vst, js;
         auto types = engine.host.list.getTypes();
 
         std::map<String, PopupMenu> byVendor;
         for (int i = 0; i < types.size(); ++i)
             if (! types[i].isInstrument)
                 byVendor[types[i].manufacturerName].addItem (1000 + i, types[i].name);
-
         for (auto& kv : byVendor)
-            add.addSubMenu (kv.first.isEmpty() ? String ("Otros") : kv.first, kv.second);
+            vst.addSubMenu (kv.first.isEmpty() ? String ("Otros") : kv.first, kv.second);
         if (byVendor.empty())
-            add.addItem (1, T ("(primero pulsa 'Escanear plugins')"), false);
+            vst.addItem (1, T ("(primero pulsa 'Escanear plugins')"), false);
 
-        m.addSubMenu (T ("Añadir plugin"), add);
-        m.addSeparator();
-        for (int i = 0; i < (int) t.plugins.size(); ++i)
-            m.addItem (100 + i, T ("Abrir: ") + t.plugins[(size_t) i]->getName());
-        for (int i = 0; i < (int) t.plugins.size(); ++i)
-            m.addItem (200 + i, T ("Quitar: ") + t.plugins[(size_t) i]->getName());
-        m.addSeparator();
-        m.addItem (300, T ("Automatización de esta pista y sus efectos..."));
+        js.addItem (400, T ("Cargar archivo .jsfx..."));
+        js.addItem (401, T ("Elegir carpeta de JSFX..."));
+
+        Array<File> found;
+        const File folder (jsfxFolderFile().loadFileAsString().trim());
+        if (folder.isDirectory())
+        {
+            found = folder.findChildFiles (File::findFiles, true, "*.jsfx");
+            found.sort();
+            if (found.size() > 300) found.removeRange (300, found.size() - 300);
+            if (found.size() > 0) js.addSeparator();
+            for (int i = 0; i < found.size(); ++i)
+                js.addItem (100000 + i, found[i].getRelativePathFrom (folder));
+        }
+
+        m.addSubMenu ("VST3", vst);
+        m.addSubMenu ("JSFX", js);
 
         SafePointer<MainComponent> sp (this);
-        Track* tp = &t;
-        m.showMenuAsync (PopupMenu::Options(), [sp, tp, types] (int r)
+        m.showMenuAsync (PopupMenu::Options(), [sp, types, found, onPicked] (int r)
         {
             auto* self = sp.getComponent();
-            if (self == nullptr || r == 0 || ! self->engine.hasTrack (tp)) return;
+            if (self == nullptr || r == 0) return;
 
-            if (r >= 1000)
+            if (r >= 100000)
+            {
+                if (r - 100000 < found.size()) self->loadJsfx (found[r - 100000], onPicked);
+            }
+            else if (r == 400)
+            {
+                self->chooser = std::make_unique<FileChooser> (T ("Elegir un archivo JSFX"), File(), "*.jsfx");
+                self->chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                                            [sp, onPicked] (const FileChooser& fc)
+                {
+                    auto* s2 = sp.getComponent();
+                    if (s2 != nullptr && fc.getResult().existsAsFile()) s2->loadJsfx (fc.getResult(), onPicked);
+                });
+            }
+            else if (r == 401)
+            {
+                self->chooser = std::make_unique<FileChooser> (T ("Carpeta con archivos .jsfx"));
+                self->chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
+                                            [sp, onPicked] (const FileChooser& fc)
+                {
+                    auto* s2 = sp.getComponent();
+                    if (s2 == nullptr || ! fc.getResult().isDirectory()) return;
+                    s2->jsfxFolderFile().getParentDirectory().createDirectory();
+                    s2->jsfxFolderFile().replaceWithText (fc.getResult().getFullPathName());
+                    MessageManager::callAsync ([sp, onPicked] { if (auto* s3 = sp.getComponent()) s3->pickPlugin (onPicked); });
+                });
+            }
+            else if (r >= 1000)
             {
                 String err;
                 auto inst = self->engine.host.create (types[r - 1000], self->engine.sampleRate, self->engine.maxBlock, err);
                 if (inst == nullptr)
                 {
-                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Plugin", "No se pudo cargar:\n" + err);
+                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Plugin", T ("No se pudo cargar:\n") + err);
                     return;
                 }
-                self->envWindow.reset();      // la lista de parámetros cambia
-                self->engine.addPlugin (*tp, std::move (inst));
-                self->openEditor (*tp->plugins.back());
-            }
-            else if (r == 300)
-            {
-                self->showEnvelopePanel (tp);
-            }
-            else if (r >= 200 && r < 300)
-            {
-                const int idx = r - 200;
-                if (idx < (int) tp->plugins.size())
-                {
-                    self->envWindow.reset();
-                    self->closeWindowFor (tp->plugins[(size_t) idx].get());
-                    self->engine.removePlugin (*tp, idx);   // también borra sus envolventes
-                    self->clipsChanged();                   // quita los carriles que ya no existen
-                }
-            }
-            else if (r >= 100 && r < 200)
-            {
-                const int idx = r - 100;
-                if (idx < (int) tp->plugins.size())
-                    self->openEditor (*tp->plugins[(size_t) idx]);
+                onPicked (std::move (inst));
             }
         });
     }
 
-    void timeSelectionChanged() override { selOverlay.repaint(); }
+    void loadJsfx (const File& f, const std::function<void (std::unique_ptr<AudioPluginInstance>)>& onPicked)
+    {
+        String err;
+        auto inst = JsfxProcessor::create (f, engine.sampleRate, engine.maxBlock, err);
+        if (inst == nullptr)
+        {
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "JSFX", err);
+            return;
+        }
+        onPicked (std::move (inst));
+    }
+
+    void addToChain (Track* t, std::unique_ptr<AudioPluginInstance> inst)
+    {
+        if (t != nullptr && ! engine.hasTrack (t)) return;
+        envWindow.reset();
+        AudioPluginInstance* raw = nullptr;
+        if (t != nullptr) { engine.addPlugin (*t, std::move (inst)); raw = t->plugins.back().get(); }
+        else { engine.addMasterPlugin (std::move (inst)); raw = engine.masterPlugins.back().get(); }
+        clipsChanged();
+        openEditor (*raw);
+    }
+
+    // Reemplazar: el nuevo plugin ocupa el mismo lugar y conserva el bypass; los demás no se tocan
+    void replaceInChain (Track* t, int idx, std::unique_ptr<AudioPluginInstance> inst)
+    {
+        if (t != nullptr && ! engine.hasTrack (t)) return;
+        auto& list = engine.pluginsOf (t);
+        if (! isPositiveAndBelow (idx, (int) list.size())) return;
+
+        envWindow.reset();
+        closeWindowFor (list[(size_t) idx].get());
+        if (auto* np = engine.replacePlugin (t, idx, std::move (inst)))
+        {
+            clipsChanged();
+            openEditor (*np);
+        }
+    }
+
+    void removeFromChain (Track* t, int idx)
+    {
+        if (t != nullptr && ! engine.hasTrack (t)) return;
+        auto& list = engine.pluginsOf (t);
+        if (! isPositiveAndBelow (idx, (int) list.size())) return;
+
+        envWindow.reset();
+        closeWindowFor (list[(size_t) idx].get());
+        if (t != nullptr) engine.removePlugin (*t, idx); else engine.removeMasterPlugin (idx);
+        clipsChanged();
+    }
+
+    // Abre la ventana de FX de una pista (nullptr = Master)
+    void openFxChain (Track* t)
+    {
+        if (t != nullptr && ! engine.hasTrack (t)) return;
+        if (fxWindow != nullptr && fxTarget == t) { fxWindow->toFront (true); return; }
+        fxWindow.reset();
+        fxTarget = t;
+
+        SafePointer<MainComponent> sp (this);
+        FxCallbacks cb;
+        cb.open = [sp] (AudioPluginInstance& p) { if (auto* s = sp.getComponent()) s->openEditor (p); };
+        cb.add = [sp, t]
+        {
+            if (auto* s = sp.getComponent())
+                s->pickPlugin ([sp, t] (std::unique_ptr<AudioPluginInstance> inst)
+                {
+                    if (auto* s2 = sp.getComponent()) s2->addToChain (t, std::move (inst));
+                });
+        };
+        cb.replace = [sp, t] (int idx)
+        {
+            if (auto* s = sp.getComponent())
+                s->pickPlugin ([sp, t, idx] (std::unique_ptr<AudioPluginInstance> inst)
+                {
+                    if (auto* s2 = sp.getComponent()) s2->replaceInChain (t, idx, std::move (inst));
+                });
+        };
+        cb.remove = [sp, t] (int idx)
+        {
+            MessageManager::callAsync ([sp, t, idx] { if (auto* s = sp.getComponent()) s->removeFromChain (t, idx); });
+        };
+        cb.automation = [sp, t] { if (auto* s = sp.getComponent()) s->showEnvelopePanel (t); };
+
+        const String title = t != nullptr ? T ("FX - ") + t->name : T ("FX - Master");
+        fxWindow = std::make_unique<EnvelopeWindow> (title, new FxChainPanel (engine, t, cb), [sp]
+        {
+            MessageManager::callAsync ([sp] { if (auto* s = sp.getComponent()) s->fxWindow.reset(); });
+        });
+        fxWindow->setAlwaysOnTop (false);
+    }
+
+    // Ventana de exportar -> render con barra de progreso -> aviso al terminar
+    void showExportDialog (bool preferSelection)
+    {
+        if (exportJob != nullptr) return;
+        if (engine.recording.load())
+        {
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, T ("Exportar"), T ("Detén la grabación antes de exportar."));
+            return;
+        }
+
+        const bool hasSel = engine.selEnd.load() > engine.selStart.load();
+        auto init = lastExport;
+        init.useSelection = preferSelection && hasSel;
+        if (init.folder == File()) init.folder = engine.exportDir();
+        if (currentProject != File()) init.baseName = currentProject.getFileNameWithoutExtension();
+
+        SafePointer<MainComponent> sp (this);
+        auto go = [sp] (const Engine::ExportSettings& s)
+        {
+            MessageManager::callAsync ([sp, s] { if (auto* self = sp.getComponent()) self->startExport (s); });
+        };
+
+        DialogWindow::LaunchOptions o;
+        o.content.setOwned (new ExportDialog (init, hasSel, go));
+        o.dialogTitle = T ("Exportar canción");
+        o.dialogBackgroundColour = Colour (0xff262626);
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = false;
+        o.launchAsync();
+    }
+
+    void startExport (const Engine::ExportSettings& s)
+    {
+        lastExport = s;
+        if (engine.playing) doStop();
+        envWindow.reset();
+
+        SafePointer<MainComponent> sp (this);
+        exportJob = std::make_unique<ExportJob> (engine, s, [sp, s] (bool ok, StringArray files, String err)
+        {
+            MessageManager::callAsync ([sp, s, ok, files, err]
+            {
+                auto* self = sp.getComponent();
+                if (self == nullptr) return;
+                self->exportJob.reset();
+
+                if (ok)
+                {
+                    self->setStatus (T ("Exportación terminada"));
+                    const File folder = s.folder;
+                    AlertWindow::showOkCancelBox (MessageBoxIconType::InfoIcon, T ("Exportación terminada"),
+                                                  T ("Archivos creados:\n") + files.joinIntoString ("\n"),
+                                                  T ("Abrir carpeta"), T ("Cerrar"), nullptr,
+                                                  ModalCallbackFunction::create ([folder] (int r) { if (r == 1) folder.revealToUser(); }));
+                }
+                else if (err == T ("Exportación cancelada"))
+                    self->setStatus (err);
+                else
+                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, T ("Exportar"), err);
+            });
+        });
+        exportJob->launchThread();
+    }
 
     // Menú de la selección de tiempo: sacar el audio a otro DAW y traerlo de vuelta al proyecto
     void showRangeMenu (Track& t) override
@@ -2669,6 +3300,7 @@ public:
         m.addSectionHeader (T ("Selección: ") + String ((double) (b - a) / engine.sampleRate, 2) + " s");
         m.addItem (1, T ("Exportar esta pista (selección) a WAV para otro DAW"), ! t.isBus.load());
         m.addItem (2, T ("Exportar todas las pistas (selección) en un solo WAV"));
+        m.addItem (6, T ("Exportar la selección a MP3 / WAV con efectos..."));
         m.addSeparator();
         m.addItem (3, T ("Traer audio trabajado en otro DAW (a esta pista, al inicio de la selección)..."), ! t.isBus.load());
         m.addItem (4, T ("Abrir carpeta de exportados"));
@@ -2694,6 +3326,10 @@ public:
                 self->statusLabel.setText (T ("Exportado: ") + f.getFullPathName(), dontSendNotification);
                 self->statusTicks = 400;
                 f.revealToUser();                 // abre la carpeta con el archivo ya marcado
+            }
+            else if (r == 6)
+            {
+                self->showExportDialog (true);
             }
             else if (r == 3)
             {
@@ -2734,20 +3370,8 @@ public:
     // Input FX: plugins que procesan la entrada de la tarjeta ANTES de grabar (ej. tu cadena de voz)
     void showInputFxMenu (Track& t) override
     {
-        PopupMenu m, add;
-        auto types = engine.host.list.getTypes();
-
-        std::map<String, PopupMenu> byVendor;
-        for (int i = 0; i < types.size(); ++i)
-            if (! types[i].isInstrument)
-                byVendor[types[i].manufacturerName].addItem (1000 + i, types[i].name);
-
-        for (auto& kv : byVendor)
-            add.addSubMenu (kv.first.isEmpty() ? String ("Otros") : kv.first, kv.second);
-        if (byVendor.empty())
-            add.addItem (1, T ("(primero pulsa 'Escanear plugins')"), false);
-
-        m.addSubMenu (T ("Añadir Input FX"), add);
+        PopupMenu m;
+        m.addItem (1000, T ("Añadir Input FX (VST3 / JSFX)..."));
         m.addSeparator();
         for (int i = 0; i < (int) t.inputPlugins.size(); ++i)
             m.addItem (100 + i, T ("Abrir: ") + t.inputPlugins[(size_t) i]->getName());
@@ -2758,22 +3382,20 @@ public:
 
         SafePointer<MainComponent> sp (this);
         Track* tp = &t;
-        m.showMenuAsync (PopupMenu::Options(), [sp, tp, types] (int r)
+        m.showMenuAsync (PopupMenu::Options(), [sp, tp] (int r)
         {
             auto* self = sp.getComponent();
             if (self == nullptr || r == 0 || ! self->engine.hasTrack (tp)) return;
 
-            if (r >= 1000)
+            if (r == 1000)
             {
-                String err;
-                auto inst = self->engine.host.create (types[r - 1000], self->engine.sampleRate, self->engine.maxBlock, err);
-                if (inst == nullptr)
+                self->pickPlugin ([sp, tp] (std::unique_ptr<AudioPluginInstance> inst)
                 {
-                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Plugin", "No se pudo cargar:\n" + err);
-                    return;
-                }
-                self->engine.addInputPlugin (*tp, std::move (inst));
-                self->openEditor (*tp->inputPlugins.back());
+                    auto* s2 = sp.getComponent();
+                    if (s2 == nullptr || ! s2->engine.hasTrack (tp)) return;
+                    s2->engine.addInputPlugin (*tp, std::move (inst));
+                    s2->openEditor (*tp->inputPlugins.back());
+                });
             }
             else if (r >= 200 && r < 300)
             {
@@ -2793,74 +3415,8 @@ public:
         });
     }
 
-    // Menú del canal Master: añadir, abrir y quitar plugins (limitador, EQ de masterización...)
-    void showMasterFxMenu()
-    {
-        PopupMenu m, add;
-        auto types = engine.host.list.getTypes();
-
-        std::map<String, PopupMenu> byVendor;
-        for (int i = 0; i < types.size(); ++i)
-            if (! types[i].isInstrument)
-                byVendor[types[i].manufacturerName].addItem (1000 + i, types[i].name);
-
-        for (auto& kv : byVendor)
-            add.addSubMenu (kv.first.isEmpty() ? String ("Otros") : kv.first, kv.second);
-        if (byVendor.empty())
-            add.addItem (1, T ("(primero pulsa 'Escanear plugins')"), false);
-
-        m.addSubMenu (T ("Añadir plugin al Master"), add);
-        m.addSeparator();
-        for (int i = 0; i < (int) engine.masterPlugins.size(); ++i)
-            m.addItem (100 + i, T ("Abrir: ") + engine.masterPlugins[(size_t) i]->getName());
-        for (int i = 0; i < (int) engine.masterPlugins.size(); ++i)
-            m.addItem (200 + i, T ("Quitar: ") + engine.masterPlugins[(size_t) i]->getName());
-        m.addSeparator();
-        m.addItem (300, T ("Automatización del Master y sus efectos..."));
-
-        SafePointer<MainComponent> sp (this);
-        m.showMenuAsync (PopupMenu::Options(), [sp, types] (int r)
-        {
-            auto* self = sp.getComponent();
-            if (self == nullptr || r == 0) return;
-            auto& mp = self->engine.masterPlugins;
-
-            if (r >= 1000)
-            {
-                String err;
-                auto inst = self->engine.host.create (types[r - 1000], self->engine.sampleRate, self->engine.maxBlock, err);
-                if (inst == nullptr)
-                {
-                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Plugin", "No se pudo cargar:\n" + err);
-                    return;
-                }
-                self->envWindow.reset();
-                self->engine.addMasterPlugin (std::move (inst));
-                self->openEditor (*mp.back());
-            }
-            else if (r == 300)
-            {
-                self->showEnvelopePanel (nullptr);
-            }
-            else if (r >= 200 && r < 300)
-            {
-                const int idx = r - 200;
-                if (idx < (int) mp.size())
-                {
-                    self->envWindow.reset();
-                    self->closeWindowFor (mp[(size_t) idx].get());
-                    self->engine.removeMasterPlugin (idx);
-                    self->clipsChanged();
-                }
-            }
-            else if (r >= 100 && r < 200)
-            {
-                const int idx = r - 100;
-                if (idx < (int) mp.size())
-                    self->openEditor (*mp[(size_t) idx]);
-            }
-        });
-    }
+    // FX del Master: misma ventana de FX que las pistas
+    void showMasterFxMenu() { openFxChain (nullptr); }
 
     // ------------------------- Componente ----------------------------------
     void resized() override
@@ -2879,7 +3435,7 @@ public:
         timeLabel.setBounds (bar1.removeFromLeft (130));
         bar1.removeFromLeft (8);
 
-        for (auto* b : { &bOpen, &bSave, &bAudio, &bScan, &bReport })
+        for (auto* b : { &bOpen, &bSave, &bExport, &bAudio, &bScan, &bReport })
         {
             b->setBounds (bar1.removeFromLeft (b == &bScan ? 112 : 70));
             bar1.removeFromLeft (3);
@@ -3280,6 +3836,7 @@ private:
         selClip = nullptr;
         selClips.clear();
         envWindow.reset();
+        fxWindow.reset();
         windows.clear();
         rows.clear();
         for (auto& t : engine.tracks)
@@ -3425,10 +3982,12 @@ private:
                     + T ("\n(formato no soportado o archivo demasiado grande)"));
     }
 
+    static bool isJsfxFile (const String& path) { return File (path).hasFileExtension ("jsfx"); }
+
     bool isInterestedInFileDrag (const StringArray& files) override
     {
         for (auto& p : files)
-            if (isAudioFile (p)) return true;
+            if (isAudioFile (p) || isJsfxFile (p)) return true;
         return false;
     }
 
@@ -3445,6 +4004,7 @@ private:
             items.push_back (it);
         }
 
+        if (items.empty()) return;        // solo JSFX: no se crean pistas
         dropOverlay.setInfo (std::move (items), addArea.getY() - viewport.getViewPositionY(),
                              ui::headerW - viewport.getViewPositionX()
                                  + (int) ((double) engine.startPos.load() / engine.sampleRate * pxPerSec),
@@ -3455,10 +4015,32 @@ private:
 
     void fileDragExit (const StringArray&) override { dropOverlay.setVisible (false); }
 
-    void filesDropped (const StringArray& files, int, int) override
+    // Audio -> pista nueva. Archivo .jsfx -> se añade como plugin a la pista sobre la que se suelta
+    // (o a la pista seleccionada); si tiene un error se avisa con la línea y no se carga.
+    void filesDropped (const StringArray& files, int x, int y) override
     {
         dropOverlay.setVisible (false);
         importDroppedFiles (files);
+
+        Track* target = trackAtScreenY (localPointToGlobal (Point<int> (x, y)).getY());
+        if (target == nullptr && selTrack != nullptr && engine.hasTrack (selTrack) && ! selTrack->isBus.load()) target = selTrack;
+
+        for (auto& p : files)
+            if (isJsfxFile (p))
+            {
+                if (target == nullptr)
+                {
+                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "JSFX",
+                        T ("Suelta el archivo .jsfx sobre una pista (o selecciona una pista primero)."));
+                    break;
+                }
+                SafePointer<MainComponent> sp (this);
+                Track* tp = target;
+                loadJsfx (File (p), [sp, tp] (std::unique_ptr<AudioPluginInstance> inst)
+                {
+                    if (auto* self = sp.getComponent()) self->addToChain (tp, std::move (inst));
+                });
+            }
     }
 
     void saveProject()
@@ -3484,6 +4066,7 @@ private:
             if (f == File()) return;
 
             envWindow.reset();
+            fxWindow.reset();
             windows.clear();
             rows.clear();
             String err;
@@ -3614,6 +4197,10 @@ private:
 
     std::unique_ptr<EnvelopeWindow> envWindow;           // panel de envolventes abierto (si hay)
     std::unique_ptr<EnvelopeWindow> mixerWindow;         // mezclador abierto (si hay)
+    std::unique_ptr<EnvelopeWindow> fxWindow;            // ventana de FX abierta (si hay)
+    Track* fxTarget = nullptr;                           // de qué pista (nullptr = Master)
+    std::unique_ptr<ExportJob> exportJob;
+    Engine::ExportSettings lastExport;
 
     TimelineContent content;
     AddTrackArea addArea;
@@ -3628,7 +4215,7 @@ private:
     bool wasPlaying = false;
 
     TextButton bHome, bPlay, bStop, bRec, bAdd, bAddBus, bMixer, bImport, bZoomOut, bZoomIn, bAudio, bScan, bReport, bOpen, bSave;
-    TextButton bSelect, bHand, bCut, bLoop, bMasterFx;
+    TextButton bSelect, bHand, bCut, bLoop, bMasterFx, bExport;
     Label timeLabel, bpmLabel, gridLabel, statusLabel;
     Slider master, bpmSlider;
     ComboBox gridBox;

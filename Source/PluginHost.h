@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include <functional>
+#include "JSFX.h"
 
 using namespace juce;
 
@@ -49,6 +50,9 @@ public:
 
     std::unique_ptr<AudioPluginInstance> create (const PluginDescription& d, double sr, int bs, String& err)
     {
+        if (d.pluginFormatName == "JSFX")      // efecto JSFX (.jsfx): se analiza y compila aquí; si falla, 'err' dice la línea
+            return JsfxProcessor::create (File (d.fileOrIdentifier), sr, bs, err);
+
         return formatManager.createPluginInstance (d, sr, bs, err);
     }
 

@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 #include "PluginHost.h"
+#include "Mp3Writer.h"
 
 using namespace juce;
 
@@ -99,6 +100,7 @@ struct Track
     String name { "Pista" };
     std::vector<std::unique_ptr<Clip>> clips;
     std::vector<std::unique_ptr<AudioPluginInstance>> plugins;
+    std::vector<AudioPluginInstance*> fxOff;           // plugins apagados (bypass); solo se cambia con el lock del Engine
     EnvList envs;                                      // automatización de la pista y de sus plugins
     float lastGL = -1.0f, lastGR = -1.0f;              // solo hilo de audio: ganancias del bloque anterior (rampa)
 
@@ -120,7 +122,9 @@ struct Track
     struct Send
     {
         std::atomic<Track*> target { nullptr };
-        std::atomic<float> level { 0.0f };
+        std::atomic<float> level { 1.0f };             // volumen del envío (ganancia lineal)
+        std::atomic<float> pan { 0.0f };               // paneo del envío (-1 izquierda .. +1 derecha)
+        std::atomic<bool> mute { false };              // silenciar solo este envío
     };
     std::vector<std::unique_ptr<Send>> sends;
     int busRank = -1;                                  // orden de proceso del bus (solo con el lock): un bus solo envía a rangos mayores
@@ -236,31 +240,45 @@ public:
         return 0.0f;
     }
 
-    // Pone el nivel del envío from -> to (0 = quitar el envío). Devuelve false si no está permitido (lazo).
+    Track::Send* getSend (const Track* from, const Track* to) const
+    {
+        for (auto& sd : from->sends)
+            if (sd->target.load() == to) return sd.get();
+        return nullptr;
+    }
+
+    // Crea el envío from -> to (o cambia su volumen si ya existe). Devuelve false si no está permitido (lazo / no es un bus).
     bool setSendLevel (Track* from, Track* to, float level)
     {
-        if (level <= 0.0f)
-        {
-            const SpinLock::ScopedLockType sl (lock);
-            for (size_t k = from->sends.size(); k-- > 0;)
-                if (from->sends[k]->target.load() == to)
-                    from->sends.erase (from->sends.begin() + (long) k);
-            rebuildBusOrder();
-            return true;
-        }
-
+        if (auto* sd = getSend (from, to)) { sd->level = jmax (0.0f, level); return true; }
         if (! canSend (from, to)) return false;
-
-        for (auto& s : from->sends)
-            if (s->target.load() == to) { s->level = level; return true; }   // ya existe: solo el nivel (sin lock)
 
         auto ns = std::make_unique<Track::Send>();
         ns->target = to;
-        ns->level = level;
+        ns->level = jmax (0.0f, level);
         const SpinLock::ScopedLockType sl (lock);
         from->sends.push_back (std::move (ns));
         rebuildBusOrder();
         return true;
+    }
+
+    void removeSend (Track* from, Track* to)
+    {
+        const SpinLock::ScopedLockType sl (lock);
+        for (size_t k = from->sends.size(); k-- > 0;)
+            if (from->sends[k]->target.load() == to)
+                from->sends.erase (from->sends.begin() + (long) k);
+        rebuildBusOrder();
+    }
+
+    // Como en REAPER: manda todas las pistas normales a un bus (los envíos que ya existen no se tocan).
+    int sendAllTracksTo (Track* bus)
+    {
+        int n = 0;
+        for (auto& t : tracks)
+            if (! t->isBus.load() && t->outputBus.load() != bus && getSend (t.get(), bus) == nullptr)
+                if (setSendLevel (t.get(), bus, 1.0f)) ++n;
+        return n;
     }
 
     // ¿Hay camino de envíos de 'a' hasta 'b'? (siguiendo solo buses)
@@ -642,7 +660,7 @@ public:
     // Devuelve el archivo, o File() con el motivo en 'err'.
     File exportRange (Track* only, int64 s0, int64 s1, const String& baseName, String& err)
     {
-        if (s1 <= s0) { err = "La selección está vacía"; return {}; }
+        if (s1 <= s0) { err = String::fromUTF8 ("La selección está vacía"); return {}; }
 
         auto used = [&] (const Track& t)
         {
@@ -657,7 +675,7 @@ public:
                 for (auto& c : t->clips)
                     if (c->startSample.load() < s1 && c->startSample.load() + c->audio.getNumSamples() > s0)
                         any = true;
-        if (! any) { err = "No hay audio dentro de la selección"; return {}; }
+        if (! any) { err = String::fromUTF8 ("No hay audio dentro de la selección"); return {}; }
 
         auto file = exportDir().getNonexistentChildFile (File::createLegalFileName (baseName) + "_"
                                                           + Time::getCurrentTime().formatted ("%H%M%S"), ".wav");
@@ -683,6 +701,194 @@ public:
         }
         w.reset();   // cierra el archivo
         return file;
+    }
+
+    // ----------------------------- Exportar la canción ----------------------
+    struct ExportSettings
+    {
+        bool mp3 = false;
+        int kbps = 192;                // MP3: 128, 192, 256 o 320
+        int bits = 24;                 // WAV: 16 o 24
+        int sampleRate = 44100;        // 44100 o 48000
+        bool stems = false;            // false = mezcla del Master; true = un archivo por pista (con sus FX y su fader)
+        bool useSelection = false;     // false = toda la canción; true = la selección de tiempo
+        File folder;
+        String baseName { "Mezcla" };
+    };
+
+    // Primera muestra y última (sin incluir) que se exportarían. Devuelve false si no hay nada que exportar.
+    bool exportBounds (const ExportSettings& st, int64& a, int64& b) const
+    {
+        if (st.useSelection)
+        {
+            a = selStart.load();
+            b = selEnd.load();
+            return b > a;
+        }
+
+        int64 end = 0;
+        for (auto& t : tracks)
+            for (auto& c : t->clips)
+                end = jmax (end, c->startSample.load() + (int64) c->audio.getNumSamples());
+        a = 0;
+        b = end + (int64) (2.0 * sampleRate);       // 2 s de cola para reverbs y delays
+        return end > 0;
+    }
+
+    // Render offline: pasa la canción por exactamente la misma cadena que al reproducir (plugins, bypass, automatización,
+    // fader/pan, envíos, buses, Master). 'progress' recibe 0..1 y devuelve false para cancelar.
+    // Se llama desde un hilo aparte; durante el render el audio en vivo queda en silencio.
+    bool renderExport (const ExportSettings& st, const std::function<bool (double)>& progress, StringArray& outFiles, String& err)
+    {
+        int64 s0 = 0, s1 = 0;
+        if (! exportBounds (st, s0, s1))
+        {
+            err = st.useSelection ? String (String::fromUTF8 ("La selección de tiempo está vacía")) : String ("No hay audio en el proyecto para exportar");
+            return false;
+        }
+        if (! st.folder.isDirectory() && ! st.folder.createDirectory().wasOk())
+        {
+            err = "No se pudo crear la carpeta de destino";
+            return false;
+        }
+
+        struct Guard
+        {
+            Engine& e;
+            explicit Guard (Engine& x) : e (x)
+            {
+                e.rendering = true;
+                const SpinLock::ScopedLockType sl (e.lock);       // espera a que termine el bloque de audio en curso
+            }
+            ~Guard() { e.tap = nullptr; e.rendering = false; }
+        } guard (*this);
+
+        const double outRate = (double) st.sampleRate;
+        const bool resample = std::abs (outRate - sampleRate) > 0.5;
+        const int chunk = jmin (maxBlock, 1024);
+
+        std::vector<std::unique_ptr<ExportSink>> sinks;
+        const String ext = st.mp3 ? ".mp3" : ".wav";
+        const String base = File::createLegalFileName (st.baseName.isEmpty() ? String ("Mezcla") : st.baseName);
+
+        auto openSink = [&] (Track* tr, const File& file) -> bool
+        {
+            auto sk = std::make_unique<ExportSink>();
+            sk->track = tr;
+            sk->file = file;
+            if (resample) sk->rs.init (sampleRate, outRate);
+
+            if (st.mp3)
+            {
+                char eb[256] = {};
+                sk->mp3 = lpMp3Open (file.getFullPathName().toWideCharPointer(), st.sampleRate, st.kbps, eb, 256);
+                if (sk->mp3 == nullptr) { err = String::fromUTF8 (eb); return false; }
+            }
+            else
+            {
+                std::unique_ptr<FileOutputStream> fos (file.createOutputStream());
+                if (fos == nullptr) { err = "No se pudo crear el archivo:\n" + file.getFullPathName(); return false; }
+                WavAudioFormat wav;
+                sk->wav.reset (wav.createWriterFor (fos.get(), outRate, 2, st.bits, {}, 0));
+                if (sk->wav == nullptr) { err = "No se pudo preparar el archivo WAV"; return false; }
+                fos.release();    // el writer es dueño del stream
+            }
+            sinks.push_back (std::move (sk));
+            return true;
+        };
+
+        if (! st.stems)
+        {
+            if (! openSink (nullptr, st.folder.getNonexistentChildFile (base, ext))) return false;
+        }
+        else
+        {
+            for (auto& t : tracks)
+            {
+                bool hasAudio = t->isBus.load();
+                for (auto& c : t->clips)
+                    if (c->startSample.load() < s1 && c->startSample.load() + c->audio.getNumSamples() > s0) hasAudio = true;
+                if (! hasAudio) continue;
+
+                const String nm = base + "_" + File::createLegalFileName (t->name);
+                if (! openSink (t.get(), st.folder.getNonexistentChildFile (nm, ext))) { abortSinks (sinks); return false; }
+            }
+            if (sinks.empty()) { err = "No hay pistas con audio para exportar"; return false; }
+        }
+
+        RenderTap rt;
+        for (auto& sk : sinks)
+            if (sk->track != nullptr)
+                rt.stems.push_back ({ sk->track, AudioBuffer<float> (2, chunk) });
+        {
+            size_t k = 0;
+            for (auto& sk : sinks)
+                if (sk->track != nullptr) sk->stem = &rt.stems[k++];
+        }
+        tap = &rt;
+
+        // estado limpio: sin colas de reverb o delay de la reproducción anterior
+        for (auto& p : masterPlugins) p->reset();
+        for (auto& t : tracks)
+        {
+            for (auto& p : t->plugins) p->reset();
+            t->lastGL = t->lastGR = -1.0f;
+        }
+        lastMasterG = -1.0f;
+
+        bool cancelled = false, failed = false;
+        const double total = (double) (s1 - s0);
+
+        for (int64 pos = s0; pos < s1 && ! failed; pos += chunk)
+        {
+            const int n = (int) jmin<int64> (chunk, s1 - pos);
+            mix.clear (0, n);
+            processMix (pos, n, true, false, false, n, 0, nullptr, 0);
+
+            for (auto& sk : sinks)
+            {
+                const float* l = sk->stem != nullptr ? sk->stem->buf.getReadPointer (0) : mix.getReadPointer (0);
+                const float* r = sk->stem != nullptr ? sk->stem->buf.getReadPointer (1) : mix.getReadPointer (1);
+                if (! deliver (*sk, l, r, n, st, err)) { failed = true; break; }
+            }
+
+            if (! progress ((double) (pos - s0 + n) / total)) { cancelled = true; break; }
+        }
+
+        if (! failed && ! cancelled)
+            for (auto& sk : sinks)
+                if (resample && ! finishResample (*sk, st, err)) { failed = true; break; }
+
+        // cerrar archivos
+        for (auto& sk : sinks)
+        {
+            sk->wav.reset();
+            if (sk->mp3 != nullptr)
+            {
+                char eb[256] = {};
+                if (! lpMp3Close (sk->mp3, eb, 256) && ! failed && ! cancelled) { failed = true; err = String::fromUTF8 (eb); }
+                sk->mp3 = nullptr;
+            }
+        }
+
+        // dejar el motor como estaba
+        for (auto& p : masterPlugins) p->reset();
+        for (auto& t : tracks)
+        {
+            for (auto& p : t->plugins) p->reset();
+            t->lastGL = t->lastGR = -1.0f;
+        }
+        lastMasterG = -1.0f;
+
+        if (failed || cancelled)
+        {
+            for (auto& sk : sinks) sk->file.deleteFile();
+            if (cancelled && ! failed) err = String::fromUTF8 ("Exportación cancelada");
+            return false;
+        }
+
+        for (auto& sk : sinks) outFiles.add (sk->file.getFullPathName());
+        return true;
     }
 
     // Copia de un clip (mismo audio, fades y tramo del archivo) que empieza en 'newStart'. Devuelve la copia.
@@ -798,6 +1004,7 @@ public:
             const SpinLock::ScopedLockType sl (lock);
             if (! isPositiveAndBelow (index, (int) t.plugins.size())) return;
             dropEnvelopesOf (t.envs, t.plugins[(size_t) index].get());
+            t.fxOff.erase (std::remove (t.fxOff.begin(), t.fxOff.end(), t.plugins[(size_t) index].get()), t.fxOff.end());
             dead = std::move (t.plugins[(size_t) index]);
             t.plugins.erase (t.plugins.begin() + index);
         }
@@ -842,10 +1049,94 @@ public:
             const SpinLock::ScopedLockType sl (lock);
             if (! isPositiveAndBelow (index, (int) masterPlugins.size())) return;
             dropEnvelopesOf (masterEnvs, masterPlugins[(size_t) index].get());
+            masterFxOff.erase (std::remove (masterFxOff.begin(), masterFxOff.end(), masterPlugins[(size_t) index].get()), masterFxOff.end());
             dead = std::move (masterPlugins[(size_t) index]);
             masterPlugins.erase (masterPlugins.begin() + index);
         }
         dead->releaseResources();
+    }
+
+    // ------------------------ Cadena de FX: bypass, orden y reemplazo --------
+    // 't' = nullptr significa el canal Master. El plugin de arriba procesa primero.
+    std::vector<AudioPluginInstance*>& fxOffOf (Track* t) { return t != nullptr ? t->fxOff : masterFxOff; }
+
+    static bool isOff (const std::vector<AudioPluginInstance*>& v, const AudioPluginInstance* p)
+    {
+        return std::find (v.begin(), v.end(), p) != v.end();
+    }
+
+    bool isFxOff (Track* t, AudioPluginInstance* p) { return isOff (fxOffOf (t), p); }
+
+    void setFxOff (Track* t, AudioPluginInstance* p, bool off)
+    {
+        const SpinLock::ScopedLockType sl (lock);
+        auto& v = fxOffOf (t);
+        v.erase (std::remove (v.begin(), v.end(), p), v.end());
+        if (off) v.push_back (p);
+    }
+
+    // true si hay efectos y todos están apagados
+    bool allFxOff (Track* t)
+    {
+        auto& list = pluginsOf (t);
+        if (list.empty()) return false;
+        for (auto& p : list)
+            if (! isFxOff (t, p.get())) return false;
+        return true;
+    }
+
+    // Bypass All: apaga (o enciende) todos los efectos de la pista / del Master a la vez
+    void setAllFxOff (Track* t, bool off)
+    {
+        const SpinLock::ScopedLockType sl (lock);
+        auto& v = fxOffOf (t);
+        v.clear();
+        if (off)
+            for (auto& p : pluginsOf (t)) v.push_back (p.get());
+    }
+
+    // Cambia el orden de la cadena (el plugin conserva su bypass y sus automatizaciones)
+    void movePlugin (Track* t, int from, int to)
+    {
+        const SpinLock::ScopedLockType sl (lock);
+        auto& list = pluginsOf (t);
+        const int n = (int) list.size();
+        if (! isPositiveAndBelow (from, n) || ! isPositiveAndBelow (to, n) || from == to) return;
+
+        auto p = std::move (list[(size_t) from]);
+        list.erase (list.begin() + from);
+        list.insert (list.begin() + to, std::move (p));
+    }
+
+    // Reemplaza el plugin de la posición 'index' por otro: mismo lugar y mismo bypass; los demás no se tocan.
+    // Las automatizaciones del plugin viejo se borran (sus parámetros ya no existen). Devuelve el plugin nuevo.
+    AudioPluginInstance* replacePlugin (Track* t, int index, std::unique_ptr<AudioPluginInstance> np)
+    {
+        if (np == nullptr) return nullptr;
+        clearUndo();
+        np->setRateAndBufferSizeDetails (sampleRate, maxBlock);
+        np->prepareToPlay (sampleRate, maxBlock);
+
+        std::unique_ptr<AudioPluginInstance> dead;
+        AudioPluginInstance* result = nullptr;
+        {
+            const SpinLock::ScopedLockType sl (lock);
+            auto& list = pluginsOf (t);
+            if (! isPositiveAndBelow (index, (int) list.size())) return nullptr;
+
+            auto& off = fxOffOf (t);
+            AudioPluginInstance* old = list[(size_t) index].get();
+            const bool wasOff = isOff (off, old);
+            dropEnvelopesOf (envsOf (t), old);
+            off.erase (std::remove (off.begin(), off.end(), old), off.end());
+
+            result = np.get();
+            dead = std::move (list[(size_t) index]);
+            list[(size_t) index] = std::move (np);
+            if (wasOff) off.push_back (result);
+        }
+        dead->releaseResources();
+        return result;
     }
 
     // ------------------------------ Automatización --------------------------
@@ -1079,6 +1370,8 @@ public:
                 auto* se = te->createNewChildElement ("SEND");
                 se->setAttribute ("to", indexOf (sd->target.load()));
                 se->setAttribute ("level", (double) sd->level.load());
+                se->setAttribute ("pan", (double) sd->pan.load());
+                se->setAttribute ("mute", sd->mute.load());
             }
 
             for (auto& c : t->clips)
@@ -1095,6 +1388,7 @@ public:
             for (auto& p : t->plugins)
             {
                 auto* fx = te->createNewChildElement ("FX");
+                fx->setAttribute ("bypass", isOff (t->fxOff, p.get()));
                 if (auto desc = p->getPluginDescription().createXml())
                     fx->addChildElement (desc.release());
                 MemoryBlock mb;
@@ -1126,6 +1420,7 @@ public:
         for (auto& p : masterPlugins)
         {
             auto* fx = mfx->createNewChildElement ("FX");
+            fx->setAttribute ("bypass", isOff (masterFxOff, p.get()));
             if (auto desc = p->getPluginDescription().createXml())
                 fx->addChildElement (desc.release());
             MemoryBlock mb;
@@ -1171,6 +1466,7 @@ public:
                 const SpinLock::ScopedLockType sl (lock);
                 oldFx.swap (masterPlugins);
                 oldEnvs.swap (masterEnvs);
+                masterFxOff.clear();
             }
             for (auto& p : oldFx) p->releaseResources();
         }   // plugins viejos del master destruidos aquí
@@ -1234,6 +1530,7 @@ public:
                         inst->setStateInformation (mb.getData(), (int) mb.getSize());
                     auto* raw = inst.get();
                     addPlugin (*t, std::move (inst));
+                    if (fx->getBoolAttribute ("bypass", false)) setFxOff (t, raw, true);
                     orig.push_back (raw);
                 }
                 else { orig.push_back (nullptr); ++missing; }
@@ -1273,7 +1570,15 @@ public:
             t.outputBus = at (te->getIntAttribute ("out", -1));
             // envíos nuevos (<SEND to= level=>) y, para proyectos viejos, send0/lvl0 y send1/lvl1
             for (auto* se : te->getChildWithTagNameIterator ("SEND"))
-                setSendLevel (&t, at (se->getIntAttribute ("to", -1)), (float) se->getDoubleAttribute ("level", 0.0));
+            {
+                Track* dst = at (se->getIntAttribute ("to", -1));
+                if (setSendLevel (&t, dst, (float) se->getDoubleAttribute ("level", 1.0)))
+                    if (auto* sd = getSend (&t, dst))
+                    {
+                        sd->pan = (float) se->getDoubleAttribute ("pan", 0.0);
+                        sd->mute = se->getBoolAttribute ("mute", false);
+                    }
+            }
             for (int s = 0; s < 2; ++s)
                 if (te->hasAttribute ("send" + String (s)))
                     setSendLevel (&t, at (te->getIntAttribute ("send" + String (s), -1)),
@@ -1296,6 +1601,7 @@ public:
                         inst->setStateInformation (mb.getData(), (int) mb.getSize());
                     auto* raw = inst.get();
                     addMasterPlugin (std::move (inst));
+                    if (fx->getBoolAttribute ("bypass", false)) setFxOff (nullptr, raw, true);
                     origMaster.push_back (raw);
                 }
                 else { origMaster.push_back (nullptr); ++missing; }
@@ -1347,35 +1653,147 @@ public:
 
     void audioDeviceStopped() override {}
 
-    void audioDeviceIOCallbackWithContext (const float* const* in, int numIn,
-                                           float* const* out, int numOut,
-                                           int n, const AudioIODeviceCallbackContext&) override
+    // --- ayudas de la exportación ---
+    struct StemTap { Track* track; AudioBuffer<float> buf; };
+    struct RenderTap { std::vector<StemTap> stems; };
+
+    // Cambio de frecuencia de muestreo en flujo continuo (si la tarjeta no está a 44100/48000 como se pidió)
+    struct StreamResampler
     {
-        for (int c = 0; c < numOut; ++c)
-            if (out[c] != nullptr)
-                FloatVectorOperations::clear (out[c], n);
+        static constexpr int outBlock = 1024;
+        double ratio = 1.0;
+        LagrangeInterpolator li[2];
+        std::vector<float> fifo[2];
+        int64 produced = 0, totalIn = 0;
+        float outL[outBlock] = {}, outR[outBlock] = {};
 
-        SpinLock::ScopedTryLockType sl (lock);
-        if (! sl.isLocked() || n > maxBlock) return;
+        void init (double srcRate, double dstRate) { ratio = srcRate / dstRate; }
 
-        mix.clear (0, n);
-        const bool isPlaying = playing.load();
-        const int64 pos = position.load();
-        const bool isRec = recording.load();
-
-        // Bucle: si el bloque cruza el final del bucle, la parte que sobra se toma del inicio del bucle.
-        const int64 lS = loopStart.load(), lE = loopEnd.load();
-        const bool useLoop = loopOn.load() && ! isRec && (lE - lS) >= n && pos < lE && pos + n >= lE;
-        const int len1 = useLoop ? (int) (lE - pos) : n;
-
-        const bool clickOn = isPlaying && metronome.load() && (int) clickBuf.size() >= n;
-        if (clickOn)
+        void feed (const float* l, const float* r, int n, const std::function<bool (const float*, const float*, int)>& emit)
         {
-            renderMetronome (pos, 0, len1);
-            if (useLoop && len1 < n)
-                renderMetronome (lS, len1, n - len1);
+            fifo[0].insert (fifo[0].end(), l, l + n);
+            fifo[1].insert (fifo[1].end(), r, r + n);
+            totalIn += n;
+
+            const int need = (int) std::ceil (outBlock * ratio) + 3;
+            while ((int) fifo[0].size() >= need)
+            {
+                const int used = li[0].process (ratio, fifo[0].data(), outL, outBlock);
+                li[1].process (ratio, fifo[1].data(), outR, outBlock);
+                fifo[0].erase (fifo[0].begin(), fifo[0].begin() + used);
+                fifo[1].erase (fifo[1].begin(), fifo[1].begin() + used);
+                produced += outBlock;
+                if (! emit (outL, outR, outBlock)) return;
+            }
         }
 
+        void finish (const std::function<bool (const float*, const float*, int)>& emit)
+        {
+            const int64 total = (int64) std::floor ((double) totalIn / ratio);
+            while (produced < total)
+            {
+                const int m = (int) jmin<int64> (outBlock, total - produced);
+                const int need = (int) std::ceil (m * ratio) + 3;
+                while ((int) fifo[0].size() < need) { fifo[0].push_back (0.0f); fifo[1].push_back (0.0f); }
+
+                const int used = li[0].process (ratio, fifo[0].data(), outL, m);
+                li[1].process (ratio, fifo[1].data(), outR, m);
+                fifo[0].erase (fifo[0].begin(), fifo[0].begin() + used);
+                fifo[1].erase (fifo[1].begin(), fifo[1].begin() + used);
+                produced += m;
+                if (! emit (outL, outR, m)) return;
+            }
+        }
+    };
+
+    struct ExportSink
+    {
+        Track* track = nullptr;                 // nullptr = Master
+        StemTap* stem = nullptr;
+        File file;
+        std::unique_ptr<AudioFormatWriter> wav;
+        void* mp3 = nullptr;
+        StreamResampler rs;
+        std::vector<short> pcm;
+        Random dither;
+    };
+
+    static void abortSinks (std::vector<std::unique_ptr<ExportSink>>& sinks)
+    {
+        for (auto& sk : sinks)
+        {
+            sk->wav.reset();
+            if (sk->mp3 != nullptr) { char eb[64] = {}; lpMp3Close (sk->mp3, eb, 64); sk->mp3 = nullptr; }
+            sk->file.deleteFile();
+        }
+    }
+
+    // Escribe 'n' muestras ya en la frecuencia de salida (clip a ±1, dither en 16 bits)
+    bool writeOut (ExportSink& sk, const float* l, const float* r, int n, const ExportSettings& st, String& err)
+    {
+        if (sk.mp3 != nullptr)
+        {
+            sk.pcm.resize ((size_t) n * 2);
+            for (int i = 0; i < n; ++i)
+            {
+                sk.pcm[(size_t) i * 2]     = (short) jlimit (-32767, 32767, (int) std::lrint (l[i] * 32767.0f));
+                sk.pcm[(size_t) i * 2 + 1] = (short) jlimit (-32767, 32767, (int) std::lrint (r[i] * 32767.0f));
+            }
+            char eb[256] = {};
+            if (! lpMp3Write (sk.mp3, sk.pcm.data(), n, eb, 256)) { err = String::fromUTF8 (eb); return false; }
+            return true;
+        }
+
+        AudioBuffer<float> tmp (2, n);
+        tmp.copyFrom (0, 0, l, n);
+        tmp.copyFrom (1, 0, r, n);
+        if (st.bits == 16)
+            for (int c = 0; c < 2; ++c)
+            {
+                auto* d = tmp.getWritePointer (c);
+                for (int i = 0; i < n; ++i)
+                    d[i] += (sk.dither.nextFloat() - sk.dither.nextFloat()) * (1.0f / 32768.0f);
+            }
+        for (int c = 0; c < 2; ++c)
+            FloatVectorOperations::clip (tmp.getWritePointer (c), tmp.getReadPointer (c), -1.0f, 1.0f, n);
+
+        if (! sk.wav->writeFromAudioSampleBuffer (tmp, 0, n)) { err = String::fromUTF8 ("No se pudo escribir el WAV (¿disco lleno?)"); return false; }
+        return true;
+    }
+
+    bool deliver (ExportSink& sk, const float* l, const float* r, int n, const ExportSettings& st, String& err)
+    {
+        if (sk.rs.ratio == 1.0)
+            return writeOut (sk, l, r, n, st, err);
+
+        bool ok = true;
+        sk.rs.feed (l, r, n, [&] (const float* a, const float* b, int m)
+        {
+            ok = writeOut (sk, a, b, m, st, err);
+            return ok;
+        });
+        return ok;
+    }
+
+    bool finishResample (ExportSink& sk, const ExportSettings& st, String& err)
+    {
+        if (sk.rs.ratio == 1.0) return true;
+        bool ok = true;
+        sk.rs.finish ([&] (const float* a, const float* b, int m)
+        {
+            ok = writeOut (sk, a, b, m, st, err);
+            return ok;
+        });
+        return ok;
+    }
+
+    RenderTap* tap = nullptr;       // solo durante la exportación por pistas
+
+    // Mezcla un bloque: pistas, plugins, automatización, envíos, buses y canal Master. El resultado queda en 'mix'.
+    // Lo usan el callback de audio y la exportación (render offline).
+    void processMix (int64 pos, int n, bool isPlaying, bool isRec, bool useLoop, int len1, int64 lS,
+                     const float* const* in, int numIn)
+    {
         bool anySolo = false;
         for (auto& t : tracks) if (t->solo) anySolo = true;
 
@@ -1454,7 +1872,7 @@ public:
             }
 
             for (auto& p : t->plugins)
-                processPlugin (*p, b, n, isBypassed (t->envs, p.get(), pos));
+                processPlugin (*p, b, n, isBypassed (t->envs, p.get(), pos) || isOff (t->fxOff, p.get()));
 
             const bool silent = t->mute.load() || envMuted || (! bus && anySolo && ! t->solo.load());
             const float g = silent ? 0.0f : t->gain.load() * envGain;
@@ -1470,16 +1888,25 @@ public:
             t->peakL = jmax (b.getMagnitude (0, 0, n), t->peakL.load() * 0.85f);
             t->peakR = jmax (b.getMagnitude (1, 0, n), t->peakR.load() * 0.85f);
 
+            if (tap != nullptr)           // exportación por pistas (stems): se copia la salida de la pista (con FX y fader)
+                for (auto& st : tap->stems)
+                    if (st.track == t)
+                    {
+                        st.buf.copyFrom (0, 0, b, 0, 0, n);
+                        st.buf.copyFrom (1, 0, b, 1, 0, n);
+                    }
+
             // Envíos (post-fader) hacia buses. Las pistas y también los buses pueden enviar; un bus solo envía a
             // buses que se procesan después de él (busRank mayor): así nunca hay realimentación.
             for (auto& sd : t->sends)
             {
                 Track* st = sd->target.load();
                 const float lvl = sd->level.load();
-                if (st != nullptr && st != t && st->isBus.load() && lvl > 0.0f && st->busRank > t->busRank)
+                if (st != nullptr && st != t && st->isBus.load() && lvl > 0.0f && ! sd->mute.load() && st->busRank > t->busRank)
                 {
-                    st->buf.addFrom (0, 0, b, 0, 0, n, lvl);
-                    st->buf.addFrom (1, 0, b, 1, 0, n, lvl);
+                    const float sp = jlimit (-1.0f, 1.0f, sd->pan.load());
+                    st->buf.addFrom (0, 0, b, 0, 0, n, lvl * (sp > 0.0f ? 1.0f - sp : 1.0f));
+                    st->buf.addFrom (1, 0, b, 1, 0, n, lvl * (sp < 0.0f ? 1.0f + sp : 1.0f));
                 }
             }
 
@@ -1506,12 +1933,46 @@ public:
                 masterEnvGain = envToGain (e->valueAt (pos));
 
         for (auto& p : masterPlugins)
-            processPlugin (*p, mix, n, isBypassed (masterEnvs, p.get(), pos));
+            processPlugin (*p, mix, n, isBypassed (masterEnvs, p.get(), pos) || isOff (masterFxOff, p.get()));
 
         const float mg = masterGain.load() * masterEnvGain;
         if (lastMasterG < 0.0f) lastMasterG = mg;
         mix.applyGainRamp (0, n, lastMasterG, mg);
         lastMasterG = mg;
+    }
+
+    void audioDeviceIOCallbackWithContext (const float* const* in, int numIn,
+                                           float* const* out, int numOut,
+                                           int n, const AudioIODeviceCallbackContext&) override
+    {
+        for (int c = 0; c < numOut; ++c)
+            if (out[c] != nullptr)
+                FloatVectorOperations::clear (out[c], n);
+
+        if (rendering.load()) return;          // se está exportando: el audio en vivo se detiene
+
+        SpinLock::ScopedTryLockType sl (lock);
+        if (! sl.isLocked() || n > maxBlock) return;
+
+        mix.clear (0, n);
+        const bool isPlaying = playing.load();
+        const int64 pos = position.load();
+        const bool isRec = recording.load();
+
+        // Bucle: si el bloque cruza el final del bucle, la parte que sobra se toma del inicio del bucle.
+        const int64 lS = loopStart.load(), lE = loopEnd.load();
+        const bool useLoop = loopOn.load() && ! isRec && (lE - lS) >= n && pos < lE && pos + n >= lE;
+        const int len1 = useLoop ? (int) (lE - pos) : n;
+
+        const bool clickOn = isPlaying && metronome.load() && (int) clickBuf.size() >= n;
+        if (clickOn)
+        {
+            renderMetronome (pos, 0, len1);
+            if (useLoop && len1 < n)
+                renderMetronome (lS, len1, n - len1);
+        }
+
+        processMix (pos, n, isPlaying, isRec, useLoop, len1, lS, in, numIn);
 
         if (numOut >= 2)
         {
@@ -1588,6 +2049,8 @@ public:
     std::vector<std::unique_ptr<Track>> tracks;
     std::vector<std::unique_ptr<AudioPluginInstance>> masterPlugins;   // cadena de efectos del canal Master
     EnvList masterEnvs;                                                // automatización del Master
+    std::vector<AudioPluginInstance*> masterFxOff;                     // plugins del Master apagados (bypass)
+    std::atomic<bool> rendering { false };                             // exportando: el callback de audio no toca nada
     std::atomic<bool> playing { false }, recording { false };
     std::atomic<int64> position { 0 };
     std::atomic<int64> startPos { 0 };                // posición de inicio: a donde vuelve el cursor al parar
