@@ -21,13 +21,15 @@ FetchContent_MakeAvailable(JUCE)
 juce_add_gui_app(LaPautaStudio
     PRODUCT_NAME "La Pauta Studio"
     COMPANY_NAME "La Pauta"
-    VERSION 0.1.0
-    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Assets/LaPautaStudio.png")
+    VERSION 0.1.0)
 
 juce_generate_juce_header(LaPautaStudio)
 
 target_sources(LaPautaStudio PRIVATE
     Source/Main.cpp
+    Source/Mp3Writer.cpp
+    Source/Mp3Writer.h
+    Source/JSFX.h
     Source/Engine.h
     Source/PluginHost.h
     Source/UI.h)
@@ -50,6 +52,10 @@ endif()
 
 if(MSVC)
     target_compile_options(LaPautaStudio PRIVATE /utf-8)
+endif()
+
+if(WIN32)
+    target_link_libraries(LaPautaStudio PRIVATE mfplat mfreadwrite mfuuid ole32)
 endif()
 
 target_link_libraries(LaPautaStudio
