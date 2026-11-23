@@ -200,28 +200,64 @@ public:
         return v;
     }
 
-    int height() const { return (int) visibleLanes().size() * ui::laneH; }
+    int height() const
+    {
+        int h = 0;
+        for (auto* e : visibleLanes()) h += e->laneH;
+        return h;
+    }
+
+    // ¿El ratón está en el borde inferior de la cabecera de un carril? (arrastra para cambiar su alto)
+    bool onGrip (const MouseEvent& e, int top0) const
+    {
+        if (e.x >= ui::headerW || e.y < top0) return false;
+        int top = top0;
+        for (auto* env : visibleLanes())
+        {
+            const int bottom = top + env->laneH;
+            if (e.y >= bottom - 6 && e.y < bottom) return true;
+            top = bottom;
+        }
+        return false;
+    }
+
+    void resetGrip (const MouseEvent& e, int top0)
+    {
+        if (! onGrip (e, top0)) return;
+        int top = top0;
+        for (auto* env : visibleLanes())
+        {
+            const int bottom = top + env->laneH;
+            if (e.y >= bottom - 6 && e.y < bottom) { env->laneH = 72; owner.clipsChanged(); return; }
+            top = bottom;
+        }
+    }
 
     // curves = false: fondo y cabeceras (antes de la rejilla); curves = true: líneas y puntos (encima)
     void paint (Graphics& g, int top0, int width, double pps, bool curves)
     {
         auto lanes = visibleLanes();
 
+        int nextTop = top0;
         for (size_t k = 0; k < lanes.size(); ++k)
         {
             const Envelope& e = *lanes[k];
-            const int top = top0 + (int) k * ui::laneH;
+            const int top = nextTop;
+            const int laneH = e.laneH;
+            nextTop += laneH;
             const bool on = e.active.load();
 
             if (! curves)
             {
                 g.setColour (Colour (0xff23272c));
-                g.fillRect (0, top, ui::headerW, ui::laneH);
+                g.fillRect (0, top, ui::headerW, laneH);
                 g.setColour (Colour (0xff12171c));
-                g.fillRect (ui::headerW, top, jmax (0, width - ui::headerW), ui::laneH);
+                g.fillRect (ui::headerW, top, jmax (0, width - ui::headerW), laneH);
                 g.setColour (Colours::black);
                 g.drawHorizontalLine (top, 0.0f, (float) width);
-                g.drawVerticalLine (ui::headerW - 1, (float) top, (float) (top + ui::laneH));
+                g.drawVerticalLine (ui::headerW - 1, (float) top, (float) (top + laneH));
+                g.setColour (Colour (0xff555555));
+                g.fillRect (ui::headerW / 2 - 14, top + laneH - 4, 28, 2);        // agarrador de alto
 
                 g.setFont (12.0f);
                 g.setColour (on ? Colours::white : Colours::grey);
@@ -256,11 +292,11 @@ public:
             else
             {
                 g.setColour (Colours::white.withAlpha (0.07f));
-                g.drawHorizontalLine (top + ui::laneH / 2, (float) ui::headerW, (float) width);
+                g.drawHorizontalLine (top + laneH / 2, (float) ui::headerW, (float) width);
 
                 if (e.points.empty()) continue;
 
-                auto yOf = [top] (float v) { return (float) top + 4.0f + (1.0f - v) * (float) (ui::laneH - 8); };
+                auto yOf = [top, laneH] (float v) { return (float) top + 4.0f + (1.0f - v) * (float) (laneH - 8); };
                 auto xOf = [&] (int64 s) { return (float) ui::headerW + (float) ((double) s / eng.sampleRate * pps); };
 
                 Path p;
@@ -295,11 +331,22 @@ public:
 
         auto lanes = visibleLanes();
         if (e.y < top0) return false;
-        const int k = (e.y - top0) / ui::laneH;
-        if (! isPositiveAndBelow (k, (int) lanes.size())) return false;
+        int k = -1, top = top0;
+        for (size_t i = 0; i < lanes.size(); ++i)
+        {
+            if (e.y < top + lanes[i]->laneH) { k = (int) i; break; }
+            top += lanes[i]->laneH;
+        }
+        if (k < 0) return false;
 
         auto* env = lanes[(size_t) k];
-        const int top = top0 + k * ui::laneH;
+
+        if (e.x < ui::headerW && ! e.mods.isPopupMenu() && e.y >= top + env->laneH - 6)    // agarrador: cambia el alto del carril
+        {
+            resizeEnv = env;
+            resizeStartH = env->laneH;
+            return true;
+        }
 
         if (e.x < ui::headerW)                                  // cabecera del carril
         {
@@ -340,6 +387,13 @@ public:
 
     bool mouseDrag (const MouseEvent& e, int)
     {
+        if (resizeEnv != nullptr)
+        {
+            if (! exists (resizeEnv)) { resizeEnv = nullptr; return true; }
+            const int nh = jlimit (40, 300, resizeStartH + e.getDistanceFromDragStartY());
+            if (nh != resizeEnv->laneH) { resizeEnv->laneH = nh; owner.clipsChanged(); }
+            return true;
+        }
         if (dragEnv == nullptr || dragIdx < 0) return false;
 
         const float v = valueFromY (*dragEnv, e.y - dragTop);
@@ -351,6 +405,7 @@ public:
 
     void mouseUp()
     {
+        resizeEnv = nullptr;
         if (undoOpen)
         {
             undoOpen = false;
@@ -371,7 +426,7 @@ private:
 
     static float valueFromY (const Envelope& env, int yInLane)
     {
-        const float v = jlimit (0.0f, 1.0f, 1.0f - (float) (yInLane - 4) / (float) (ui::laneH - 8));
+        const float v = jlimit (0.0f, 1.0f, 1.0f - (float) (yInLane - 4) / (float) (env.laneH - 8));
         return env.isStep() ? (v >= 0.5f ? 1.0f : 0.0f) : v;
     }
 
@@ -380,7 +435,7 @@ private:
         for (size_t i = 0; i < env.points.size(); ++i)
         {
             const double px = ui::headerW + (double) env.points[i].sample / eng.sampleRate * owner.pps();
-            const double py = top + 4.0 + (1.0 - env.points[i].value) * (ui::laneH - 8);
+            const double py = top + 4.0 + (1.0 - env.points[i].value) * (env.laneH - 8);
             if (std::abs (x - px) <= 6.0 && std::abs (y - py) <= 6.0)
                 return (int) i;
         }
@@ -424,6 +479,8 @@ private:
 
     bool undoOpen = false;
     Envelope* dragEnv = nullptr;
+    Envelope* resizeEnv = nullptr;
+    int resizeStartH = 72;
     int dragIdx = -1;
     int dragTop = 0;
     float dragValue = 0.0f;
@@ -776,7 +833,7 @@ public:
     void mouseMove (const MouseEvent& e) override
     {
         MouseCursor::StandardCursorType cur = MouseCursor::NormalCursor;
-        if (onGrip (e)) { setMouseCursor (MouseCursor::UpDownResizeCursor); return; }
+        if (onGrip (e) || lanes.onGrip (e, baseH())) { setMouseCursor (MouseCursor::UpDownResizeCursor); return; }
         if (e.x >= ui::headerW && e.y < baseH())
         {
             if (owner.getTool() == ui::toolHand)     cur = MouseCursor::DraggingHandCursor;
@@ -999,6 +1056,7 @@ public:
     void mouseDoubleClick (const MouseEvent& e) override
     {
         if (onGrip (e)) { track.uiHeight = 96; resized(); owner.clipsChanged(); }
+        else lanes.resetGrip (e, baseH());
     }
 
     void mouseUp (const MouseEvent& e) override

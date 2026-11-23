@@ -58,6 +58,7 @@ struct Envelope
 
     std::atomic<bool> active { true };            // si está desactivada, se ignora (los puntos se conservan)
     bool visible = false;                         // solo interfaz: mostrar la franja bajo la pista
+    int laneH = 72;                               // solo interfaz: alto del carril (lo elige el usuario)
     std::vector<EnvPoint> points;                 // ordenados por muestra
     float lastApplied = -1.0f;                    // solo hilo de audio: último valor enviado al plugin
 
@@ -2229,6 +2230,7 @@ private:
             ee->setAttribute ("param", e->paramIndex);
             ee->setAttribute ("active", e->active.load());
             ee->setAttribute ("visible", e->visible);
+            ee->setAttribute ("laneH", e->laneH);
             ee->setAttribute ("pts", pointsToString (*e));
         }
     }
@@ -2265,6 +2267,7 @@ private:
             const SpinLock::ScopedLockType sl (lock);
             e->active = ee->getBoolAttribute ("active", true);
             e->visible = ee->getBoolAttribute ("visible", false);
+            e->laneH = jlimit (40, 300, ee->getIntAttribute ("laneH", 72));
             e->points = std::move (pts);
         }
     }
