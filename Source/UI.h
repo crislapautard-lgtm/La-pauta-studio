@@ -51,6 +51,8 @@ struct RowOwner
     virtual ~RowOwner() = default;
     virtual double pps() const = 0;
     virtual void showFxMenu (Track&) = 0;
+    virtual void trackDragMove (Track&, int screenY) = 0;          // arrastrando una pista por su cabecera
+    virtual void trackDragEnd (Track&, bool drop) = 0;
     virtual void removeTrack (Track&) = 0;
     virtual void setCursorFromX (int x) = 0;
     virtual void clipsChanged() = 0;
@@ -88,9 +90,12 @@ struct RowOwner
 class PluginWindow : public DocumentWindow
 {
 public:
-    PluginWindow (AudioPluginInstance& p, std::function<void (PluginWindow*)> closeCb)
+    // 'ownerHandle' = ventana principal del DAW: así la ventana del plugin queda siempre por encima de ella
+    // (no se esconde detrás al darle Play) y se minimiza con ella. 'spaceFn' = barra espaciadora = Play / Stop.
+    PluginWindow (AudioPluginInstance& p, std::function<void (PluginWindow*)> closeCb,
+                  void* ownerHandle = nullptr, std::function<void()> spaceFn = {})
         : DocumentWindow (p.getName(), Colour (0xff202020), DocumentWindow::closeButton),
-          plugin (&p), onClose (std::move (closeCb))
+          plugin (&p), onClose (std::move (closeCb)), onSpace (std::move (spaceFn))
     {
         setUsingNativeTitleBar (true);
 
@@ -101,16 +106,25 @@ public:
         setContentOwned (ed, true);
         setResizable (ed->isResizable(), false);
         centreWithSize (getWidth(), getHeight());
+        if (ownerHandle != nullptr)
+            addToDesktop (getDesktopWindowStyleFlags(), ownerHandle);
         setVisible (true);
     }
 
     ~PluginWindow() override { clearContentComponent(); }
     void closeButtonPressed() override { onClose (this); }
 
+    bool keyPressed (const KeyPress& k) override
+    {
+        if (k == KeyPress::spaceKey && onSpace) { onSpace(); return true; }
+        return DocumentWindow::keyPressed (k);
+    }
+
     AudioPluginInstance* plugin;
 
 private:
     std::function<void (PluginWindow*)> onClose;
+    std::function<void()> onSpace;
 };
 
 // ---------------------------------------------------------------------------
@@ -525,7 +539,7 @@ public:
     }
 
     Track& getTrack() { return track; }
-    bool resizing = false;
+    bool resizing = false, headerDrag = false, headerMoved = false;
     int resizeStartH = 96;
 
     // alto de la fila: la pista + un carril por cada automatización visible
@@ -661,6 +675,11 @@ public:
             g.setColour (trackColour());
             g.fillRect (0, 0, 5, getHeight());
         }
+        if (headerMoved)       // se está moviendo esta pista
+        {
+            g.setColour (Colours::white.withAlpha (0.16f));
+            g.fillRect (0, 0, ui::headerW, getHeight());
+        }
         g.setColour (Colours::black);
         g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
         g.drawVerticalLine (ui::headerW - 1, 0.0f, (float) getHeight());
@@ -790,6 +809,7 @@ public:
         if (e.x < ui::headerW)
         {
             if (e.mods.isPopupMenu()) showColourMenu();
+            else { headerDrag = true; headerMoved = false; }      // clic en la cabecera: arrastra para cambiar de lugar
             return;
         }
 
@@ -905,6 +925,13 @@ public:
 
     void mouseDrag (const MouseEvent& e) override
     {
+        if (headerDrag)
+        {
+            if (! headerMoved && e.getDistanceFromDragStart() < 5) return;
+            if (! headerMoved) { headerMoved = true; setMouseCursor (MouseCursor::DraggingHandCursor); repaint(); }
+            owner.trackDragMove (track, e.getScreenY());
+            return;
+        }
         if (resizing)
         {
             const int nh = jlimit (minH, maxH, resizeStartH + e.getDistanceFromDragStartY());
@@ -976,6 +1003,15 @@ public:
 
     void mouseUp (const MouseEvent& e) override
     {
+        if (headerDrag)
+        {
+            const bool moved = headerMoved;
+            headerDrag = headerMoved = false;
+            setMouseCursor (MouseCursor::NormalCursor);
+            if (moved) owner.trackDragEnd (track, true);
+            repaint();
+            return;
+        }
         if (resizing) { resizing = false; return; }
         if (rightDown)
         {
@@ -2218,6 +2254,14 @@ private:
     bool ok = false;
     StringArray files;
     String err;
+};
+
+// Línea naranja que marca dónde caerá la pista que se está moviendo
+class TrackDropMarker : public Component
+{
+public:
+    TrackDropMarker() { setInterceptsMouseClicks (false, false); }
+    void paint (Graphics& g) override { g.fillAll (Colour (0xffd08a2e)); }
 };
 
 // Cuadro de selección (arrastrar con el botón izquierdo en un espacio vacío): rectángulo naranja translúcido
@@ -3696,6 +3740,62 @@ private:
         addAndMakeVisible (b);
     }
 
+    // ---- cambiar el orden de pistas y buses arrastrando su cabecera ----
+    int dropIndexAt (int screenY) const
+    {
+        const int y = content.getLocalPoint (nullptr, Point<int> (0, screenY)).y;
+        for (size_t i = 0; i < rows.size(); ++i)
+        {
+            const int top = rows[i]->getY(), h = rows[i]->getHeight();
+            if (y < top + h / 2) return (int) i;
+        }
+        return (int) rows.size();
+    }
+
+    void trackDragMove (Track& t, int screenY) override
+    {
+        juce::ignoreUnused (t);
+        trackDropIdx = dropIndexAt (screenY);
+
+        int y = ui::rulerH;
+        if (trackDropIdx < (int) rows.size()) y = rows[(size_t) trackDropIdx]->getY();
+        else if (! rows.empty()) y = rows.back()->getBottom();
+
+        if (trackDropMarker.getParentComponent() == nullptr) content.addAndMakeVisible (trackDropMarker);
+        trackDropMarker.setBounds (0, y - 1, content.getWidth(), 3);
+        trackDropMarker.toFront (false);
+
+        // desplazamiento automático al acercarse al borde de la lista
+        const auto vb = viewport.getScreenBounds();
+        if (screenY < vb.getY() + 24)            viewport.setViewPosition (viewport.getViewPositionX(), jmax (0, viewport.getViewPositionY() - 18));
+        else if (screenY > vb.getBottom() - 24)  viewport.setViewPosition (viewport.getViewPositionX(), viewport.getViewPositionY() + 18);
+    }
+
+    void trackDragEnd (Track& t, bool drop) override
+    {
+        trackDropMarker.setVisible (false);
+        content.removeChildComponent (&trackDropMarker);
+        trackDropMarker.setVisible (true);
+        const int to0 = trackDropIdx;
+        trackDropIdx = -1;
+        if (! drop || to0 < 0) return;
+
+        int from = -1;
+        for (size_t i = 0; i < rows.size(); ++i)
+            if (&rows[i]->getTrack() == &t) { from = (int) i; break; }
+        if (from < 0) return;
+
+        const int to = to0 > from ? to0 - 1 : to0;
+        if (to == from) return;
+
+        engine.moveTrack (from, to);
+        auto row = std::move (rows[(size_t) from]);
+        rows.erase (rows.begin() + from);
+        rows.insert (rows.begin() + to, std::move (row));
+        layoutContent();
+        repaintRows();
+    }
+
     void addTrackRow (Track* t)
     {
         auto row = std::make_unique<TrackRow> (engine, *t, *this);
@@ -4272,12 +4372,19 @@ private:
             if (w->plugin == &p) { w->toFront (true); return; }
 
         SafePointer<MainComponent> sp (this);
+        void* ownerHandle = getTopLevelComponent() != nullptr ? getTopLevelComponent()->getWindowHandle() : nullptr;
         windows.push_back (std::make_unique<PluginWindow> (p, [sp] (PluginWindow* w)
         {
             MessageManager::callAsync ([sp, w]
             {
                 if (auto* self = sp.getComponent()) self->closeWindow (w);
             });
+        }, ownerHandle, [sp]
+        {
+            if (auto* self = sp.getComponent())
+            {
+                if (self->engine.playing) self->doStop(); else self->engine.play();
+            }
         }));
     }
 
@@ -4314,6 +4421,8 @@ private:
     Engine::ExportSettings lastExport;
 
     TimelineContent content;
+    TrackDropMarker trackDropMarker;
+    int trackDropIdx = -1;
     AddTrackArea addArea;
     MasterRow masterRow { engine, *this };
     SelectionOverlay selOverlay { engine, [this] { return pxPerSec; } };

@@ -264,6 +264,20 @@ public:
         return true;
     }
 
+    // Cambia el orden de las pistas / buses (arrastrar en la lista). El sonido no cambia: solo el orden en pantalla y al guardar.
+    void moveTrack (int from, int to)
+    {
+        const int n = (int) tracks.size();
+        if (! isPositiveAndBelow (from, n) || ! isPositiveAndBelow (to, n) || from == to) return;
+
+        clearUndo();                       // los pasos guardados se refieren al orden anterior
+        const SpinLock::ScopedLockType sl (lock);
+        auto t = std::move (tracks[(size_t) from]);
+        tracks.erase (tracks.begin() + from);
+        tracks.insert (tracks.begin() + to, std::move (t));
+        rebuildBusOrder();
+    }
+
     void removeSend (Track* from, Track* to)
     {
         const SpinLock::ScopedLockType sl (lock);
