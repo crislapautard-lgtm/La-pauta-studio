@@ -45,6 +45,150 @@ namespace ui
 
 inline String T (const char* utf8) { return String::fromUTF8 (utf8); }
 
+// ---------------------------------------------------------------------------
+// Colores de la interfaz (todo el DAW). Se eligen en el botón "Colores" y se recuerdan entre sesiones.
+// ---------------------------------------------------------------------------
+struct Theme
+{
+    Colour bg     { 0xff111111 };      // fondo general y de las zonas de trabajo
+    Colour panel  { 0xff2a2a2a };      // cabeceras de pista, paneles, menús
+    Colour button { 0xff3c4650 };      // botones y cuadros de selección
+    Colour accent { 0xffd08a2e };      // selección, botones encendidos, mando de sliders
+    Colour text   { 0xffe6e6e6 };      // texto
+    Colour clip   { 0xff2b5a85 };      // color de los audios (clips)
+
+    static Theme& get() { static Theme t; return t; }
+
+    Colour bgN (int n) const         { return bg.interpolatedWith (Colours::white, 0.025f * (float) n); }
+    Colour busHeader() const         { return panel.interpolatedWith (Colour (0xff7a45c8), 0.30f); }
+    Colour masterHeader() const      { return panel.interpolatedWith (Colour (0xffc84545), 0.22f); }
+
+    struct Preset { const char* name; uint32 bg, panel, button, accent, text, clip; };
+
+    static const Preset* presets (int& n)
+    {
+        static const Preset list[] =
+        {
+            { "Original",            0xff111111, 0xff2a2a2a, 0xff3c4650, 0xffd08a2e, 0xffe6e6e6, 0xff2b5a85 },
+            { "Oscuro azul",         0xff0d1117, 0xff1c2430, 0xff2d3b4e, 0xff3b9eff, 0xffe6edf3, 0xff2f6db5 },
+            { "Verde estudio",       0xff0e1511, 0xff1e2b23, 0xff2f4a3a, 0xff3ddc84, 0xffe6f2ea, 0xff2f8a5b },
+            { "Morado",              0xff130f1c, 0xff261d36, 0xff3d2f58, 0xffb478ff, 0xffeee6f8, 0xff6a45b0 },
+            { "Rojo",                0xff170d0d, 0xff2e1b1b, 0xff4a2a2a, 0xffff5a4d, 0xfff6e8e6, 0xffa8392f },
+            { "Claro",               0xffd9dde2, 0xffeceff3, 0xffc4cad3, 0xff1f6feb, 0xff1b1f24, 0xff6fa3e0 },
+            { "Alto contraste",      0xff000000, 0xff141414, 0xff2a2a2a, 0xffffd400, 0xffffffff, 0xff0066cc }
+        };
+        n = (int) (sizeof (list) / sizeof (list[0]));
+        return list;
+    }
+
+    void setPreset (int i)
+    {
+        int n = 0;
+        auto* p = presets (n);
+        if (i < 0 || i >= n) return;
+        bg = Colour (p[i].bg); panel = Colour (p[i].panel); button = Colour (p[i].button);
+        accent = Colour (p[i].accent); text = Colour (p[i].text); clip = Colour (p[i].clip);
+    }
+
+    bool isOriginal() const
+    {
+        int n = 0;
+        auto* p = presets (n);
+        return bg == Colour (p[0].bg) && panel == Colour (p[0].panel) && button == Colour (p[0].button)
+            && accent == Colour (p[0].accent) && text == Colour (p[0].text) && clip == Colour (p[0].clip);
+    }
+
+    static File file()
+    {
+        return File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("LaPautaStudio").getChildFile ("theme.xml");
+    }
+
+    void load()
+    {
+        if (auto xml = parseXML (file()))
+        {
+            auto rd = [&] (const char* k, Colour& c) { if (xml->hasAttribute (k)) c = Colour ((uint32) xml->getStringAttribute (k).getHexValue64()); };
+            rd ("bg", bg); rd ("panel", panel); rd ("button", button); rd ("accent", accent); rd ("text", text); rd ("clip", clip);
+        }
+    }
+
+    void save() const
+    {
+        XmlElement xml ("THEME");
+        xml.setAttribute ("bg", String::toHexString ((int64) bg.getARGB()));
+        xml.setAttribute ("panel", String::toHexString ((int64) panel.getARGB()));
+        xml.setAttribute ("button", String::toHexString ((int64) button.getARGB()));
+        xml.setAttribute ("accent", String::toHexString ((int64) accent.getARGB()));
+        xml.setAttribute ("text", String::toHexString ((int64) text.getARGB()));
+        xml.setAttribute ("clip", String::toHexString ((int64) clip.getARGB()));
+        file().getParentDirectory().createDirectory();
+        xml.writeTo (file());
+    }
+
+    // Aplica los colores a todos los controles (botones, menús, sliders, textos...) y repinta todo el DAW
+    void apply()
+    {
+        static std::vector<std::unique_ptr<LookAndFeel_V4>> keep;      // los estilos anteriores siguen vivos hasta cerrar
+        auto lf = std::make_unique<LookAndFeel_V4>();
+
+        if (! isOriginal())
+        {
+            const Colour onAccent = accent.contrasting (1.0f);
+            auto set = [&] (int id, Colour c) { lf->setColour (id, c); };
+
+            set (ResizableWindow::backgroundColourId, bg);
+            set (DocumentWindow::textColourId, text);
+            set (TextButton::buttonColourId, button);
+            set (TextButton::buttonOnColourId, accent);
+            set (TextButton::textColourOffId, text);
+            set (TextButton::textColourOnId, onAccent);
+            set (ToggleButton::textColourId, text);
+            set (ToggleButton::tickColourId, accent);
+            set (Label::textColourId, text);
+            set (ComboBox::backgroundColourId, button.darker (0.25f));
+            set (ComboBox::textColourId, text);
+            set (ComboBox::arrowColourId, text);
+            set (ComboBox::outlineColourId, button.brighter (0.3f));
+            set (TextEditor::backgroundColourId, bgN (2));
+            set (TextEditor::textColourId, text);
+            set (TextEditor::outlineColourId, button);
+            set (TextEditor::focusedOutlineColourId, accent);
+            set (TextEditor::highlightColourId, accent.withAlpha (0.45f));
+            set (Slider::thumbColourId, accent);
+            set (Slider::trackColourId, accent.darker (0.4f));
+            set (Slider::backgroundColourId, bgN (3));
+            set (Slider::textBoxTextColourId, text);
+            set (Slider::textBoxBackgroundColourId, bgN (2));
+            set (Slider::textBoxOutlineColourId, button);
+            set (PopupMenu::backgroundColourId, panel);
+            set (PopupMenu::textColourId, text);
+            set (PopupMenu::headerTextColourId, accent);
+            set (PopupMenu::highlightedBackgroundColourId, accent);
+            set (PopupMenu::highlightedTextColourId, onAccent);
+            set (ScrollBar::thumbColourId, button.brighter (0.4f));
+            set (AlertWindow::backgroundColourId, panel);
+            set (AlertWindow::textColourId, text);
+            set (ListBox::backgroundColourId, bgN (1));
+            set (ListBox::textColourId, text);
+            set (TooltipWindow::backgroundColourId, panel);
+            set (TooltipWindow::textColourId, text);
+            set (ColourSelector::backgroundColourId, panel);
+        }
+
+        LookAndFeel::setDefaultLookAndFeel (lf.get());
+        keep.push_back (std::move (lf));
+
+        for (int i = 0; i < TopLevelWindow::getNumTopLevelWindows(); ++i)
+            if (auto* w = TopLevelWindow::getTopLevelWindow (i))
+            {
+                if (auto* rw = dynamic_cast<ResizableWindow*> (w)) rw->setBackgroundColour (bg);
+                w->sendLookAndFeelChange();
+                w->repaint();
+            }
+    }
+};
+
+
 // Interfaz que las filas usan para hablar con la ventana principal.
 struct RowOwner
 {
@@ -94,7 +238,7 @@ public:
     // (no se esconde detrás al darle Play) y se minimiza con ella. 'spaceFn' = barra espaciadora = Play / Stop.
     PluginWindow (AudioPluginInstance& p, std::function<void (PluginWindow*)> closeCb,
                   void* ownerHandle = nullptr, std::function<void()> spaceFn = {})
-        : DocumentWindow (p.getName(), Colour (0xff202020), DocumentWindow::closeButton),
+        : DocumentWindow (p.getName(), Theme::get().panel, DocumentWindow::closeButton),
           plugin (&p), onClose (std::move (closeCb)), onSpace (std::move (spaceFn))
     {
         setUsingNativeTitleBar (true);
@@ -661,7 +805,7 @@ public:
             else if (res == 101)       self->track.color = 0;
             else if (res == 100)
             {
-                const Colour start = self->track.color.load() != 0 ? self->trackColour() : Colour (0xff2b5a85);
+                const Colour start = self->track.color.load() != 0 ? self->trackColour() : Theme::get().clip;
                 auto box = std::make_unique<TrackColourSelector> (start, [sp] (Colour c)
                 {
                     if (auto* s2 = sp.getComponent()) { s2->track.color = c.withAlpha (1.0f).getARGB(); s2->repaint(); }
@@ -752,8 +896,8 @@ public:
 
     void paint (Graphics& g) override
     {
-        g.fillAll (Colour (0xff1c1c1c));
-        const Colour base = track.isBus.load() ? Colour (0xff3a2a4a) : Colour (0xff2a2a2a);   // buses en morado
+        g.fillAll (Theme::get().bgN (4));
+        const Colour base = track.isBus.load() ? Theme::get().busHeader() : Theme::get().panel;   // buses en morado
         g.setColour (track.color.load() != 0 ? base.interpolatedWith (trackColour(), 0.35f) : base);
         g.fillRect (0, 0, ui::headerW, getHeight());
         if (track.color.load() != 0)
@@ -798,8 +942,8 @@ public:
             const double lenSec = (double) c->audio.getNumSamples() / eng.sampleRate;
             Rectangle<int> r (ui::headerW + (int) (startSec * pps), 4, jmax (2, (int) (lenSec * pps)), baseH() - 8);
 
-            g.setColour (owner.isClipSelected (c.get()) ? Colour (0xffd08a2e)
-                         : (track.color.load() != 0 ? trackColour().darker (0.35f) : Colour (0xff2b5a85)));   // seleccionado = naranja
+            g.setColour (owner.isClipSelected (c.get()) ? Theme::get().accent
+                         : (track.color.load() != 0 ? trackColour().darker (0.35f) : Theme::get().clip));   // seleccionado = naranja
             g.fillRect (r);
 
             auto vis = r.getIntersection (visible);
@@ -1393,7 +1537,7 @@ public:
 
     void paint (Graphics& g) override
     {
-        g.fillAll (Colour (0xff161616));
+        g.fillAll (Theme::get().bgN (2));
         const auto clip = g.getClipBounds();
         if (clip.getY() >= ui::rulerH || ! getPps || ! getBeatSec) return;
 
@@ -1825,7 +1969,7 @@ public:
         const bool master = track == nullptr;
         if (! master && ! eng.hasTrack (track)) return;
 
-        g.fillAll (master ? Colour (0xff3a2c2c) : (track->isBus.load() ? Colour (0xff3a2a4a) : Colour (0xff2a2a2a)));
+        g.fillAll (master ? Theme::get().masterHeader() : (track->isBus.load() ? Theme::get().busHeader() : Theme::get().panel));
         g.setColour (Colours::black);
         g.drawRect (getLocalBounds());
 
@@ -1973,7 +2117,7 @@ public:
     void paintOverChildren (Graphics& g) override
     {
         if (dropLine < 0) return;
-        g.setColour (Colour (0xffd08a2e));
+        g.setColour (Theme::get().accent);
         g.fillRect (0, dropLine * rowH - 1, getWidth(), 3);
     }
 };
@@ -2029,7 +2173,7 @@ public:
         layoutRows();
     }
 
-    void paint (Graphics& g) override { g.fillAll (Colour (0xff202020)); }
+    void paint (Graphics& g) override { g.fillAll (Theme::get().panel); }
 
 private:
     struct Row : public Component
@@ -2319,7 +2463,7 @@ public:
         ok.setBounds (btns.removeFromRight (100));
     }
 
-    void paint (Graphics& g) override { g.fillAll (Colour (0xff262626)); }
+    void paint (Graphics& g) override { g.fillAll (Theme::get().panel); }
 
 private:
     void fillQuality (bool resetSel)
@@ -2406,7 +2550,7 @@ class TrackDropMarker : public Component
 {
 public:
     TrackDropMarker() { setInterceptsMouseClicks (false, false); }
-    void paint (Graphics& g) override { g.fillAll (Colour (0xffd08a2e)); }
+    void paint (Graphics& g) override { g.fillAll (Theme::get().accent); }
 };
 
 // Cuadro de selección (arrastrar con el botón izquierdo en un espacio vacío): rectángulo naranja translúcido
@@ -2425,9 +2569,9 @@ public:
     void paint (Graphics& g) override
     {
         if (rect.isEmpty()) return;
-        g.setColour (Colour (0xffd08a2e).withAlpha (0.18f));
+        g.setColour (Theme::get().accent.withAlpha (0.18f));
         g.fillRect (rect);
-        g.setColour (Colour (0xffd08a2e).withAlpha (0.95f));
+        g.setColour (Theme::get().accent.withAlpha (0.95f));
         g.drawRect (rect, 1);
     }
 
@@ -2479,7 +2623,7 @@ public:
         list.setBounds (r);
     }
 
-    void paint (Graphics& g) override { g.fillAll (Colour (0xff202020)); }
+    void paint (Graphics& g) override { g.fillAll (Theme::get().panel); }
 
 private:
     struct Entry
@@ -2609,7 +2753,7 @@ class EnvelopeWindow : public DocumentWindow
 {
 public:
     EnvelopeWindow (const String& title, Component* content, std::function<void()> onCloseFn)
-        : DocumentWindow (title, Colour (0xff202020), DocumentWindow::closeButton), onClose (std::move (onCloseFn))
+        : DocumentWindow (title, Theme::get().panel, DocumentWindow::closeButton), onClose (std::move (onCloseFn))
     {
         setUsingNativeTitleBar (true);
         setContentOwned (content, true);
@@ -2637,7 +2781,7 @@ public:
 
     void paint (Graphics& g) override
     {
-        g.fillAll (Colour (0xff181818));
+        g.fillAll (Theme::get().bgN (3));
         g.setColour (Colour (0xff24282d));
         g.fillRect (0, 0, ui::headerW, getHeight());
 
@@ -2722,8 +2866,8 @@ public:
 
     void paint (Graphics& g) override
     {
-        g.fillAll (Colour (0xff1a1a1a));
-        g.setColour (Colour (0xff3a2c2c));
+        g.fillAll (Theme::get().bgN (3));
+        g.setColour (Theme::get().masterHeader());
         g.fillRect (0, 0, ui::headerW, getHeight());
 
         g.setColour (Colours::white);
@@ -2827,7 +2971,7 @@ public:
 
     void paint (Graphics& g) override
     {
-        g.fillAll (Colour (0xff1b1b1b));
+        g.fillAll (Theme::get().bgN (4));
         g.setColour (Colours::black);
         g.drawHorizontalLine (0, 0.0f, (float) getWidth());
 
@@ -2980,6 +3124,121 @@ private:
     double pps = 100.0;
 };
 
+// ---------------------------------------------------------------------------
+// Ventana de colores de la interfaz: temas listos + color libre para cada parte del DAW
+// ---------------------------------------------------------------------------
+class ThemeDialog : public Component
+{
+public:
+    ThemeDialog()
+    {
+        lblPreset.setText (T ("Tema"), dontSendNotification);
+        addAndMakeVisible (lblPreset);
+
+        int n = 0;
+        auto* pr = Theme::presets (n);
+        for (int i = 0; i < n; ++i) presetBox.addItem (pr[i].name, i + 1);
+        presetBox.setText (T ("Personalizado"), dontSendNotification);
+        presetBox.onChange = [this]
+        {
+            Theme::get().setPreset (presetBox.getSelectedId() - 1);
+            changed();
+        };
+        addAndMakeVisible (presetBox);
+
+        addSlot (T ("Fondo"),                    &Theme::bg);
+        addSlot (T ("Paneles y cabeceras"),      &Theme::panel);
+        addSlot (T ("Botones"),                  &Theme::button);
+        addSlot (T ("Acento (selección, ON)"),   &Theme::accent);
+        addSlot (T ("Texto"),                    &Theme::text);
+        addSlot (T ("Audios (clips)"),           &Theme::clip);
+
+        info.setText (T ("Los colores se aplican al momento y se guardan para la próxima vez. El color de cada pista se cambia con clic derecho en su cabecera."),
+                      dontSendNotification);
+        info.setFont (Font (FontOptions (11.5f)));
+        info.setJustificationType (Justification::topLeft);
+        addAndMakeVisible (info);
+
+        setSize (420, 80 + (int) slots.size() * 36 + 60);
+        refresh();
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (14, 12);
+        auto top = r.removeFromTop (28);
+        lblPreset.setBounds (top.removeFromLeft (150));
+        presetBox.setBounds (top);
+        r.removeFromTop (10);
+        for (auto& sl : slots)
+        {
+            auto line = r.removeFromTop (30);
+            sl->label.setBounds (line.removeFromLeft (200));
+            sl->swatch.setBounds (line);
+            r.removeFromTop (6);
+        }
+        info.setBounds (r.removeFromTop (46));
+    }
+
+    void paint (Graphics& g) override { g.fillAll (Theme::get().panel); }
+
+private:
+    struct Slot
+    {
+        Label label;
+        TextButton swatch;
+        Colour Theme::* member;
+    };
+
+    void addSlot (const String& name, Colour Theme::* m)
+    {
+        auto sl = std::make_unique<Slot>();
+        sl->member = m;
+        sl->label.setText (name, dontSendNotification);
+        addAndMakeVisible (sl->label);
+        sl->swatch.setButtonText (T ("Cambiar..."));
+        auto* raw = sl.get();
+        sl->swatch.onClick = [this, raw]
+        {
+            SafePointer<ThemeDialog> sp (this);
+            auto box = std::make_unique<TrackColourSelector> (Theme::get().*(raw->member), [sp, raw] (Colour c)
+            {
+                if (auto* self = sp.getComponent())
+                {
+                    Theme::get().*(raw->member) = c.withAlpha (1.0f);
+                    self->changed();
+                }
+            });
+            CallOutBox::launchAsynchronously (std::move (box), raw->swatch.getScreenBounds(), nullptr);
+        };
+        addAndMakeVisible (sl->swatch);
+        slots.push_back (std::move (sl));
+    }
+
+    void refresh()
+    {
+        for (auto& sl : slots)
+        {
+            const Colour c = Theme::get().*(sl->member);
+            sl->swatch.setColour (TextButton::buttonColourId, c);
+            sl->swatch.setColour (TextButton::textColourOffId, c.contrasting (1.0f));
+        }
+        repaint();
+    }
+
+    void changed()
+    {
+        Theme::get().save();
+        Theme::get().apply();
+        refresh();
+        if (auto* top = getTopLevelComponent()) top->repaint();
+    }
+
+    Label lblPreset, info;
+    ComboBox presetBox;
+    std::vector<std::unique_ptr<Slot>> slots;
+};
+
 class MainComponent : public Component, public RowOwner, public FileDragAndDropTarget, private Timer
 {
 public:
@@ -3010,6 +3269,7 @@ public:
         mk (bSave, "Guardar", [this] { saveProjectQuick(); });
         mk (bMasterFx, T ("FX Master"), [this] { showMasterFxMenu(); });
         mk (bExport, "Exportar", [this] { showExportDialog (false); });
+        mk (bTheme, "Colores", [this] { showThemeDialog(); });
 
         // Herramientas: Selección / Mano / Cortar
         auto mkTool = [this] (TextButton& b, const String& text, int toolId)
@@ -3550,7 +3810,7 @@ public:
         DialogWindow::LaunchOptions o;
         o.content.setOwned (new ExportDialog (init, hasSel, go));
         o.dialogTitle = T ("Exportar canción");
-        o.dialogBackgroundColour = Colour (0xff262626);
+        o.dialogBackgroundColour = Theme::get().panel;
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
         o.resizable = false;
@@ -3735,7 +3995,7 @@ public:
         timeLabel.setBounds (bar1.removeFromLeft (130));
         bar1.removeFromLeft (8);
 
-        for (auto* b : { &bOpen, &bSave, &bExport, &bAudio, &bScan, &bReport })
+        for (auto* b : { &bOpen, &bSave, &bExport, &bTheme, &bAudio, &bScan, &bReport })
         {
             b->setBounds (bar1.removeFromLeft (b == &bScan ? 112 : 70));
             bar1.removeFromLeft (3);
@@ -3775,7 +4035,7 @@ public:
 
     void paint (Graphics& g) override
     {
-        g.fillAll (Colour (0xff111111));
+        g.fillAll (Theme::get().bg);
 
         if (! masterMeterBounds.isEmpty())
         {
@@ -3803,6 +4063,13 @@ public:
             return false;
 
         const auto mods = k.getModifiers();
+
+        // Ctrl+N = sesión nueva
+        if ((mods.isCtrlDown() || mods.isCommandDown()) && (k.getKeyCode() == 'N' || k.getKeyCode() == 'n'))
+        {
+            newSession();
+            return true;
+        }
 
         // Ctrl+S = guardar; Ctrl+Mayús+S = guardar como
         if ((mods.isCtrlDown() || mods.isCommandDown()) && (k.getKeyCode() == 'S' || k.getKeyCode() == 's'))
@@ -3883,6 +4150,19 @@ private:
         b.onClick = std::move (fn);
         b.setWantsKeyboardFocus (false);
         addAndMakeVisible (b);
+    }
+
+    void showThemeDialog()
+    {
+        DialogWindow::LaunchOptions o;
+        o.content.setOwned (new ThemeDialog());
+        o.dialogTitle = T ("Colores de la interfaz");
+        o.dialogBackgroundColour = Theme::get().panel;
+        o.componentToCentreAround = this;
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = false;
+        o.launchAsync();
     }
 
     // ---- cambiar el orden de pistas y buses arrastrando su cabecera ----
@@ -4165,6 +4445,31 @@ private:
         repaintRows();
     }
 
+    void newSession()
+    {
+        SafePointer<MainComponent> sp (this);
+        AlertWindow::showAsync (MessageBoxOptions()
+                                    .withIconType (MessageBoxIconType::QuestionIcon)
+                                    .withTitle (T ("Sesión nueva"))
+                                    .withMessage (T ("¿Crear una sesión nueva? Se cierra el proyecto actual; guarda antes si no quieres perder los cambios."))
+                                    .withButton (T ("Sí, nueva sesión"))
+                                    .withButton (T ("Cancelar")),
+                                [sp] (int r)
+        {
+            auto* self = sp.getComponent();
+            if (self == nullptr || r != 1) return;
+            self->envWindow.reset();
+            self->fxWindow.reset();
+            self->windows.clear();
+            self->rows.clear();
+            self->engine.newProject();
+            self->currentProject = File();
+            self->rebuildRows();
+            self->syncControls();
+            self->setStatus (T ("Sesión nueva"));
+        });
+    }
+
     void saveProjectQuick()
     {
         if (currentProject == File())
@@ -4443,50 +4748,12 @@ private:
     // --------------------------- Audio -------------------------------------
     void showAudioSettings()
     {
-        struct AudioPanel : public Component
-        {
-            explicit AudioPanel (Engine& e) : eng (e), sel (e.deviceManager, 0, 8, 0, 2, false, false, false, false)
-            {
-                addAndMakeVisible (sel);
-               #if ! JUCE_ASIO
-                note.setText (T ("ASIO no está activado en esta versión: copia el SDK en la carpeta 'asiosdk' del proyecto (ver README)."), dontSendNotification);
-                note.setFont (Font (FontOptions (11.5f)));
-                note.setColour (Label::textColourId, Colours::orange);
-                addAndMakeVisible (note);
-               #endif
-                rescan.setButtonText (T ("Buscar tarjetas de nuevo"));
-                rescan.onClick = [this] { eng.rescanAudioDevices(); };
-                addAndMakeVisible (rescan);
-                reset.setButtonText (T ("Restablecer audio"));
-                reset.setTooltip (T ("Borra la configuración guardada y usa la tarjeta predeterminada de Windows"));
-                reset.onClick = [this] { eng.resetAudioSettings(); };
-                addAndMakeVisible (reset);
-                setSize (520, 500);
-            }
-
-            void resized() override
-            {
-                auto r = getLocalBounds();
-               #if ! JUCE_ASIO
-                note.setBounds (r.removeFromBottom (34).reduced (8, 2));
-               #endif
-                auto bar = r.removeFromBottom (36).reduced (8, 4);
-                rescan.setBounds (bar.removeFromLeft (200));
-                bar.removeFromLeft (8);
-                reset.setBounds (bar.removeFromLeft (160));
-                sel.setBounds (r);
-            }
-
-            Engine& eng;
-            AudioDeviceSelectorComponent sel;
-            TextButton rescan, reset;
-            Label note;
-        };
-
+        auto* sel = new AudioDeviceSelectorComponent (engine.deviceManager, 0, 8, 0, 2, false, false, false, false);
         DialogWindow::LaunchOptions o;
-        o.content.setOwned (new AudioPanel (engine));
+        o.content.setOwned (sel);
+        o.content->setSize (520, 460);
         o.dialogTitle = T ("Configuración de audio (driver y tarjeta)");
-        o.dialogBackgroundColour = Colour (0xff202020);
+        o.dialogBackgroundColour = Theme::get().panel;
         o.componentToCentreAround = this;
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
@@ -4618,7 +4885,7 @@ private:
     bool wasPlaying = false;
 
     TextButton bHome, bPlay, bStop, bRec, bAdd, bAddBus, bMixer, bImport, bZoomOut, bZoomIn, bAudio, bScan, bReport, bOpen, bSave;
-    TextButton bSelect, bHand, bCut, bLoop, bMasterFx, bExport;
+    TextButton bSelect, bHand, bCut, bLoop, bMasterFx, bExport, bTheme;
     Label timeLabel, bpmLabel, gridLabel, statusLabel;
     Slider master, bpmSlider;
     ComboBox gridBox;

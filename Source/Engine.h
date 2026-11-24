@@ -1483,6 +1483,39 @@ public:
         return root.writeTo (f);
     }
 
+    // Sesión nueva (Ctrl+N): vacía pistas, plugins del master, historial y valores por defecto.
+    void newProject()
+    {
+        playing = false;
+        clearUndo();
+        ++undoSuspend;
+        {
+            std::vector<std::unique_ptr<Track>> old;
+            {
+                const SpinLock::ScopedLockType sl (lock);
+                old.swap (tracks);
+                busOrder.clear();
+            }
+        }
+        {
+            std::vector<std::unique_ptr<AudioPluginInstance>> oldFx;
+            EnvList oldEnvs;
+            {
+                const SpinLock::ScopedLockType sl (lock);
+                oldFx.swap (masterPlugins);
+                oldEnvs.swap (masterEnvs);
+                masterFxOff.clear();
+            }
+            for (auto& p : oldFx) p->releaseResources();
+        }
+        masterGain = 1.0f;
+        bpm = 120.0;
+        loopStart = 0; loopEnd = 0; loopOn = false;
+        position = 0; startPos = 0;
+        --undoSuspend;
+        clearUndo();
+    }
+
     bool loadProject (const File& f, String& err)
     {
         auto xml = XmlDocument::parse (f);
