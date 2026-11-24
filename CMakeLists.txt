@@ -4,6 +4,9 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 project(LaPautaStudio VERSION 0.1.0 LANGUAGES C CXX)
+if(WIN32)
+    enable_language(RC)
+endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -30,14 +33,27 @@ if(NOT LAPAUTA_ICON)
 endif()
 message(STATUS "Icono de La Pauta Studio: ${LAPAUTA_ICON}")
 
+# Un .png lo convierte JUCE solo. Un .ico se incrusta directo con un recurso de Windows (JUCE falla al reconvertir algunos .ico).
+get_filename_component(LAPAUTA_ICON_EXT "${LAPAUTA_ICON}" LAST_EXT)
+string(TOLOWER "${LAPAUTA_ICON_EXT}" LAPAUTA_ICON_EXT)
+set(LAPAUTA_JUCE_ICON_ARGS "")
+if(LAPAUTA_ICON_EXT STREQUAL ".png")
+    set(LAPAUTA_JUCE_ICON_ARGS ICON_BIG "${LAPAUTA_ICON}" ICON_SMALL "${LAPAUTA_ICON}")
+else()
+    file(WRITE "${CMAKE_BINARY_DIR}/lapauta_icon.rc" "1 ICON \"${LAPAUTA_ICON}\"\n")
+endif()
+
 juce_add_gui_app(LaPautaStudio
     PRODUCT_NAME "La Pauta Studio"
     COMPANY_NAME "La Pauta"
-    ICON_BIG "${LAPAUTA_ICON}"
-    ICON_SMALL "${LAPAUTA_ICON}"
+    ${LAPAUTA_JUCE_ICON_ARGS}
     VERSION 0.1.0)
 
 juce_generate_juce_header(LaPautaStudio)
+
+if(NOT LAPAUTA_ICON_EXT STREQUAL ".png")
+    target_sources(LaPautaStudio PRIVATE "${CMAKE_BINARY_DIR}/lapauta_icon.rc")
+endif()
 
 target_sources(LaPautaStudio PRIVATE
     Source/Main.cpp
