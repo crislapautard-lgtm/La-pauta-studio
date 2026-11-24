@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 #include <JuceHeader.h>
 #include <atomic>
 #include <vector>
@@ -1482,6 +1483,11 @@ public:
 
         return root.writeTo (f);
     }
+
+    // Plugins "fijados": no se pueden quitar, mover ni reemplazar por accidente (solo se usa desde la interfaz).
+    bool isPinned (const AudioPluginInstance* p) const { return pinnedFx.count (p) > 0; }
+    void setPinned (const AudioPluginInstance* p, bool on) { if (on) pinnedFx.insert (p); else pinnedFx.erase (p); }
+    std::set<const AudioPluginInstance*> pinnedFx;
 
     // Sesión nueva (Ctrl+N): vacía pistas, plugins del master, historial y valores por defecto.
     void newProject()
