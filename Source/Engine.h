@@ -142,7 +142,7 @@ struct Track
 // Engine: dispositivo de audio (WASAPI / DirectSound / ASIO), transporte,
 // mezcla, grabación, plugins y proyecto.
 // ---------------------------------------------------------------------------
-class Engine : public AudioIODeviceCallback, private ChangeListener
+class Engine : public AudioIODeviceCallback, public AudioPlayHead
 {
 public:
     Engine() : thumbCache (32), writerThread ("La Pauta Writer")
@@ -154,8 +154,6 @@ public:
 
     ~Engine() override
     {
-        deviceManager.removeChangeListener (this);
-        saveAudioSettings();
         deviceManager.removeAudioCallback (this);
         writerThread.stopThread (2000);
     }
@@ -163,55 +161,10 @@ public:
     // Devuelve "" si todo bien, o el error del dispositivo.
     String start()
     {
-        // la configuración de audio (driver, tarjeta, canales, frecuencia y buffer) se recuerda entre sesiones
-        std::unique_ptr<XmlElement> saved;
-        if (audioSettingsFile().existsAsFile())
-            saved = parseXML (audioSettingsFile());
-
-        auto err = deviceManager.initialise (8, 2, saved.get(), true);
-        if (saved != nullptr && (err.isNotEmpty() || deviceManager.getCurrentAudioDevice() == nullptr))
-        {
-            // la configuración guardada ya no sirve (tarjeta desconectada, driver distinto...): se descarta y se usan los valores por defecto
-            audioSettingsFile().deleteFile();
-            deviceManager.closeAudioDevice();
-            err = deviceManager.initialise (8, 2, nullptr, true);
-        }
+        auto err = deviceManager.initialiseWithDefaultDevices (8, 2);
         deviceManager.addAudioCallback (this);
-        deviceManager.addChangeListener (this);
         return err;
     }
-
-    static File audioSettingsFile()
-    {
-        return File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("LaPautaStudio").getChildFile ("audio.xml");
-    }
-
-    // Vuelve a pedir al sistema la lista de tarjetas y drivers (por si conectaste la tarjeta con el DAW abierto)
-    void rescanAudioDevices()
-    {
-        if (auto* t = deviceManager.getCurrentDeviceTypeObject()) t->scanForDevices();
-        deviceManager.sendChangeMessage();
-    }
-
-    // Borra la configuración guardada y vuelve a los dispositivos por defecto del sistema
-    void resetAudioSettings()
-    {
-        audioSettingsFile().deleteFile();
-        deviceManager.closeAudioDevice();
-        deviceManager.initialise (8, 2, nullptr, true);
-    }
-
-    void saveAudioSettings()
-    {
-        if (deviceManager.getCurrentAudioDevice() == nullptr) return;       // sin dispositivo no se guarda nada
-        if (auto xml = deviceManager.createStateXml())
-        {
-            audioSettingsFile().getParentDirectory().createDirectory();
-            xml->writeTo (audioSettingsFile());
-        }
-    }
-
-    void changeListenerCallback (ChangeBroadcaster*) override { saveAudioSettings(); }
 
     // ------------------------------ Pistas ---------------------------------
     Track* addTrack (const String& name, bool bus = false)
@@ -1084,6 +1037,7 @@ public:
     {
         p->setRateAndBufferSizeDetails (sampleRate, maxBlock);
         p->prepareToPlay (sampleRate, maxBlock);
+        p->setPlayHead (this);       // los plugins (afinadores, etc.) leen play/posición/BPM del DAW
         const SpinLock::ScopedLockType sl (lock);
         t.plugins.push_back (std::move (p));
     }
@@ -1108,6 +1062,7 @@ public:
     {
         p->setRateAndBufferSizeDetails (sampleRate, maxBlock);
         p->prepareToPlay (sampleRate, maxBlock);
+        p->setPlayHead (this);       // los plugins (afinadores, etc.) leen play/posición/BPM del DAW
         const SpinLock::ScopedLockType sl (lock);
         t.inputPlugins.push_back (std::move (p));
     }
@@ -1129,6 +1084,7 @@ public:
     {
         p->setRateAndBufferSizeDetails (sampleRate, maxBlock);
         p->prepareToPlay (sampleRate, maxBlock);
+        p->setPlayHead (this);       // los plugins (afinadores, etc.) leen play/posición/BPM del DAW
         const SpinLock::ScopedLockType sl (lock);
         masterPlugins.push_back (std::move (p));
     }
@@ -1208,6 +1164,7 @@ public:
         clearUndo();
         np->setRateAndBufferSizeDetails (sampleRate, maxBlock);
         np->prepareToPlay (sampleRate, maxBlock);
+        np->setPlayHead (this);       // los plugins (afinadores, etc.) leen play/posición/BPM del DAW
 
         std::unique_ptr<AudioPluginInstance> dead;
         AudioPluginInstance* result = nullptr;
@@ -1734,6 +1691,7 @@ public:
         {
             p->setRateAndBufferSizeDetails (sr, maxBlock);
             p->prepareToPlay (sr, maxBlock);
+            p->setPlayHead (this);       // los plugins (afinadores, etc.) leen play/posición/BPM del DAW
         }
 
         for (auto& t : tracks)
@@ -1744,11 +1702,13 @@ public:
             {
                 p->setRateAndBufferSizeDetails (sr, maxBlock);
                 p->prepareToPlay (sr, maxBlock);
+                p->setPlayHead (this);       // los plugins (afinadores, etc.) leen play/posición/BPM del DAW
             }
             for (auto& p : t->inputPlugins)
             {
                 p->setRateAndBufferSizeDetails (sr, maxBlock);
                 p->prepareToPlay (sr, maxBlock);
+                p->setPlayHead (this);       // los plugins (afinadores, etc.) leen play/posición/BPM del DAW
             }
         }
     }
@@ -1891,11 +1851,38 @@ public:
 
     RenderTap* tap = nullptr;       // solo durante la exportación por pistas
 
+    // Información de transporte para los plugins (AudioPlayHead): estado de Play, posición, BPM y compás.
+    // Sin esto los afinadores y otros plugins no saben cuándo se reproduce y no pueden escanear la voz.
+    Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo info;
+        const double sr = jmax (1.0, sampleRate);
+        const double bp = jmax (1.0, bpm.load());
+        const int64 p = blockPos.load();
+        const double sec = (double) p / sr;
+        const double ppq = sec * bp / 60.0;
+
+        info.setTimeInSamples (p);
+        info.setTimeInSeconds (sec);
+        info.setBpm (bp);
+        info.setTimeSignature (TimeSignature { 4, 4 });
+        info.setPpqPosition (ppq);
+        info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+        info.setIsPlaying (blockPlaying.load());
+        info.setIsRecording (blockRec.load());
+        info.setIsLooping (loopOn.load());
+        return info;
+    }
+
     // Mezcla un bloque: pistas, plugins, automatización, envíos, buses y canal Master. El resultado queda en 'mix'.
     // Lo usan el callback de audio y la exportación (render offline).
     void processMix (int64 pos, int n, bool isPlaying, bool isRec, bool useLoop, int len1, int64 lS,
                      const float* const* in, int numIn)
     {
+        blockPos = pos;                    // posición de transporte que ven los plugins en este bloque
+        blockPlaying = isPlaying;
+        blockRec = isRec;
+
         bool anySolo = false;
         for (auto& t : tracks) if (t->solo) anySolo = true;
 
@@ -2165,6 +2152,8 @@ public:
     std::atomic<double> bpm { 120.0 };
     std::atomic<int64> selStart { 0 }, selEnd { 0 };  // selección de tiempo (selEnd <= selStart = no hay)
     std::atomic<bool> loopOn { false };
+    std::atomic<int64> blockPos { 0 };
+    std::atomic<bool> blockPlaying { false }, blockRec { false };
     std::atomic<int64> loopStart { 0 }, loopEnd { 0 };
     int gridId = 4;                                   // 4 = 1/4 (ver la lista de rejillas en UI.h)
 
