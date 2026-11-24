@@ -11,6 +11,9 @@ AppPublisher=La Pauta
 DefaultDirName={autopf}\La Pauta Studio
 DefaultGroupName=La Pauta Studio
 UninstallDisplayIcon={app}\{#MyAppExe}
+#if FileExists("Assets\icon.ico")
+SetupIconFile=Assets\icon.ico
+#endif
 OutputDir=installer_output
 OutputBaseFilename=LaPautaStudio-Setup-{#MyAppVersion}
 Compression=lzma2
@@ -29,9 +32,9 @@ Name: "desktopicon"; Description: "Crear un acceso directo en el escritorio"; Gr
 Source: "build\LaPautaStudio_artefacts\Release\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\La Pauta Studio"; Filename: "{app}\{#MyAppExe}"
+Name: "{group}\La Pauta Studio"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{app}\{#MyAppExe}"; IconIndex: 0
 Name: "{group}\Desinstalar La Pauta Studio"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\La Pauta Studio"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
+Name: "{autodesktop}\La Pauta Studio"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{app}\{#MyAppExe}"; IconIndex: 0; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Description: "Abrir La Pauta Studio"; Flags: nowait postinstall skipifsilent
