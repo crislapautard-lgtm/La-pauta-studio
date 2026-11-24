@@ -4448,6 +4448,12 @@ private:
             explicit AudioPanel (Engine& e) : eng (e), sel (e.deviceManager, 0, 8, 0, 2, false, false, false, false)
             {
                 addAndMakeVisible (sel);
+               #if ! JUCE_ASIO
+                note.setText (T ("ASIO no está activado en esta versión: copia el SDK en la carpeta 'asiosdk' del proyecto (ver README)."), dontSendNotification);
+                note.setFont (Font (FontOptions (11.5f)));
+                note.setColour (Label::textColourId, Colours::orange);
+                addAndMakeVisible (note);
+               #endif
                 rescan.setButtonText (T ("Buscar tarjetas de nuevo"));
                 rescan.onClick = [this] { eng.rescanAudioDevices(); };
                 addAndMakeVisible (rescan);
@@ -4461,6 +4467,9 @@ private:
             void resized() override
             {
                 auto r = getLocalBounds();
+               #if ! JUCE_ASIO
+                note.setBounds (r.removeFromBottom (34).reduced (8, 2));
+               #endif
                 auto bar = r.removeFromBottom (36).reduced (8, 4);
                 rescan.setBounds (bar.removeFromLeft (200));
                 bar.removeFromLeft (8);
@@ -4471,6 +4480,7 @@ private:
             Engine& eng;
             AudioDeviceSelectorComponent sel;
             TextButton rescan, reset;
+            Label note;
         };
 
         DialogWindow::LaunchOptions o;
