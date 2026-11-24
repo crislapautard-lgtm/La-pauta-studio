@@ -934,6 +934,116 @@ public:
         return true;
     }
 
+    // Pasa el audio de un clip por los efectos de su pista (afinador, etc.) en modo offline y deja el resultado en 'out'.
+    // Compensa la latencia de los plugins. Se llama desde un hilo aparte; durante el proceso el audio en vivo se detiene.
+    bool renderClipThroughFx (Track& t, Clip* c, AudioBuffer<float>& out, const std::function<bool (double)>& progress, String& err)
+    {
+        int active = 0;
+        for (auto& p : t.plugins) if (! isOff (t.fxOff, p.get())) ++active;
+        if (active == 0)
+        {
+            err = String::fromUTF8 ("Esta pista no tiene efectos encendidos para aplicar");
+            return false;
+        }
+
+        struct Guard
+        {
+            Engine& e;
+            explicit Guard (Engine& x) : e (x)
+            {
+                e.rendering = true;
+                const SpinLock::ScopedLockType sl (e.lock);
+            }
+            ~Guard() { e.rendering = false; }
+        } guard (*this);
+
+        int lat = 0;
+        for (auto& p : t.plugins) if (! isOff (t.fxOff, p.get())) lat += jmax (0, p->getLatencySamples());
+
+        const int n = c->audio.getNumSamples();
+        const int64 start = c->startSample.load();
+        const int chunk = jmin (maxBlock, 1024);
+        const int total = n + lat;
+        out.setSize (2, n);
+        out.clear();
+
+        for (auto& p : t.plugins) p->reset();
+        AudioBuffer<float> work (8, chunk);
+        bool cancelled = false;
+
+        for (int pos = 0; pos < total; pos += chunk)
+        {
+            const int m = jmin (chunk, total - pos);
+            work.clear();
+            const int avail = jmax (0, jmin (m, n - pos));
+            if (avail > 0)
+                for (int ch = 0; ch < 2; ++ch)
+                    work.copyFrom (ch, 0, c->audio, ch, pos, avail);
+
+            blockPos = start + pos;                // los afinadores ven la posición real del clip en el proyecto
+            blockPlaying = true;
+            blockRec = false;
+
+            for (auto& p : t.plugins)
+                processPlugin (*p, work, m, isOff (t.fxOff, p.get()));
+
+            for (int i = 0; i < m; ++i)
+            {
+                const int o = pos + i - lat;
+                if (o >= 0 && o < n)
+                    for (int ch = 0; ch < 2; ++ch)
+                        out.setSample (ch, o, work.getSample (ch, i));
+            }
+            if (! progress ((double) (pos + m) / (double) total)) { cancelled = true; break; }
+        }
+
+        for (auto& p : t.plugins) p->reset();
+        if (cancelled) { err = String::fromUTF8 ("Cancelado"); return false; }
+        return true;
+    }
+
+    // Guarda 'audio' como WAV y cambia el clip viejo por uno nuevo en el mismo lugar (con sus fades y volumen).
+    // Un solo paso de Ctrl+Z devuelve el original. Debe llamarse desde el hilo principal.
+    Clip* replaceClipWithAudio (Track& t, Clip* old, AudioBuffer<float>&& audio, String& err)
+    {
+        auto dir = File::getSpecialLocation (File::userDocumentsDirectory)
+                       .getChildFile ("La Pauta Studio").getChildFile ("Procesados");
+        dir.createDirectory();
+        const File f = dir.getNonexistentChildFile (File::createLegalFileName (old->name) + "_procesado", ".wav");
+
+        {
+            std::unique_ptr<FileOutputStream> fos (f.createOutputStream());
+            if (fos == nullptr) { err = "No se pudo crear el archivo:\n" + f.getFullPathName(); return nullptr; }
+            WavAudioFormat wav;
+            std::unique_ptr<AudioFormatWriter> w (wav.createWriterFor (fos.get(), sampleRate, 2, 24, {}, 0));
+            if (w == nullptr) { err = "No se pudo preparar el archivo WAV"; return nullptr; }
+            fos.release();
+            w->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
+        }
+
+        auto nc = makeClip (old->name, f, std::move (audio), old->startSample.load());
+        nc->fadeInSamples = old->fadeInSamples.load();
+        nc->fadeOutSamples = old->fadeOutSamples.load();
+        nc->gain = old->gain.load();
+        Clip* result = nc.get();
+
+        undoBegin();
+        std::unique_ptr<Clip> dead;
+        {
+            const SpinLock::ScopedLockType sl (lock);
+            for (size_t i = 0; i < t.clips.size(); ++i)
+                if (t.clips[i].get() == old)
+                {
+                    dead = std::move (t.clips[i]);
+                    t.clips.erase (t.clips.begin() + (long) i);
+                    break;
+                }
+            t.clips.push_back (std::move (nc));
+        }
+        retire (std::move (dead));
+        return result;
+    }
+
     // Copia de un clip (mismo audio, fades y tramo del archivo) que empieza en 'newStart'. Devuelve la copia.
     // recordUndo = true: la copia es un paso de Ctrl+Z (el gesto del ratón lo abre él mismo con undoBegin).
     Clip* duplicateClip (Track& t, Clip* c, int64 newStart, bool recordUndo)

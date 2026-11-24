@@ -221,6 +221,7 @@ struct RowOwner
     virtual void marqueeDrag (Point<int> screenPos) = 0;
     virtual void marqueeEnd() = 0;
     virtual void setLoopFromClip (Clip&) = 0;
+    virtual void applyFxToClip (Track&, Clip&) = 0;     // pasa el clip por los efectos de su pista y lo reemplaza
     virtual void toggleLoop() = 0;
 
     virtual void showEnvelopePanel (Track*) = 0;      // panel de automatización; nullptr = Master
@@ -1478,6 +1479,7 @@ private:
             m.addItem (1, T ("Dividir en el cursor"));
             m.addItem (2, T ("Eliminar clip (Supr)"));
             m.addItem (3, T ("Bucle sobre este clip"));
+            m.addItem (4, T ("Aplicar efectos y reemplazar (ej. afinación)"), ! track.plugins.empty());
             m.addSeparator();
 
             PopupMenu fo, fi;
@@ -1505,6 +1507,7 @@ private:
             if (! self->ownsClip (c)) return;   // el clip pudo borrarse con el menú abierto
 
             if (r == 3) { self->owner.setLoopFromClip (*c); return; }
+            if (r == 4) { self->owner.applyFxToClip (self->track, *c); return; }
 
             if ((r >= 30 && r < 36) || (r >= 40 && r < 46))
             {
@@ -3540,6 +3543,46 @@ public:
 
     void marqueeEnd() override { marquee.setRect ({}); }      // la selección se queda marcada en naranja
 
+    // Pasa el clip por los efectos de la pista (ej. tu afinador) y reemplaza el audio sin afinar por el resultado.
+    void applyFxToClip (Track& t, Clip& c) override
+    {
+        if (busyApply) return;
+        busyApply = true;
+        setStatus (T ("Aplicando efectos al clip..."));
+        SafePointer<MainComponent> sp (this);
+        Track* tp = &t;
+        Clip* cp = &c;
+        Thread::launch ([sp, tp, cp]
+        {
+            AudioBuffer<float> out;
+            String err;
+            bool ok = false;
+            if (auto* s = sp.getComponent())
+                ok = s->engine.renderClipThroughFx (*tp, cp, out, [] (double) { return true; }, err);
+
+            auto shared = std::make_shared<AudioBuffer<float>> (std::move (out));
+            MessageManager::callAsync ([sp, tp, cp, ok, err, shared]
+            {
+                auto* self = sp.getComponent();
+                if (self == nullptr) return;
+                self->busyApply = false;
+                String e2 = err;
+                if (ok && self->engine.hasTrack (tp))
+                {
+                    if (self->engine.replaceClipWithAudio (*tp, cp, std::move (*shared), e2) != nullptr)
+                    {
+                        self->setSelected (nullptr, nullptr);
+                        self->clipsChanged();
+                        self->setStatus (T ("Listo: el clip se reemplazó (Ctrl+Z para volver al original)"));
+                        return;
+                    }
+                }
+                self->setStatus (T ("No se pudo aplicar"));
+                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Aplicar efectos", e2.isEmpty() ? String ("No se pudo aplicar") : e2);
+            });
+        });
+    }
+
     void setLoopFromClip (Clip& c) override
     {
         engine.loopStart = c.startSample.load();
@@ -4961,6 +5004,7 @@ private:
     // ----------------------------- Datos -----------------------------------
     Engine engine;                                       // se destruye al final
     std::vector<std::unique_ptr<PluginWindow>> windows;
+    bool busyApply = false;
     std::vector<std::unique_ptr<TrackRow>> rows;
 
     std::unique_ptr<EnvelopeWindow> envWindow;           // panel de envolventes abierto (si hay)
