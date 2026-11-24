@@ -597,10 +597,39 @@ public:
 
     Track& getTrack() { return track; }
     bool resizing = false, headerDrag = false, headerMoved = false;
+    Clip* gainClip = nullptr;         // clip cuya perilla de volumen se arrastra
+    double gainStartDb = 0.0;
     int resizeStartH = 96;
 
     // alto de la fila: la pista + un carril por cada automatización visible
     int baseH() const { return track.uiHeight.load(); }
+
+    // Perilla de volumen de cada clip (como en Reaper): arrastra arriba/abajo; doble clic = 0 dB
+    static constexpr int knobD = 14;
+    Rectangle<int> knobRect (const Clip& c) const
+    {
+        const int x0 = ui::headerW + (int) ((double) c.startSample.load() / eng.sampleRate * owner.pps());
+        const int w = (int) ((double) c.audio.getNumSamples() / eng.sampleRate * owner.pps());
+        if (w < 70) return {};
+        return { x0 + 12, 4 + 1, knobD, knobD };
+    }
+
+    Clip* knobAt (const MouseEvent& e) const
+    {
+        if (e.y > 22) return nullptr;
+        for (auto& c : track.clips)
+        {
+            auto k = knobRect (*c);
+            if (! k.isEmpty() && k.expanded (3).contains (e.getPosition())) return c.get();
+        }
+        return nullptr;
+    }
+
+    static double clipDb (const Clip& c)
+    {
+        const float g = c.gain.load();
+        return g <= 0.0f ? -60.0 : (double) Decibels::gainToDecibels (g, -60.0f);
+    }
 
     // Color de la pista: clic derecho en su cabecera
     Colour trackColour() const { return Colour (track.color.load()); }
@@ -779,7 +808,7 @@ public:
                 g.setColour (Colours::white.withAlpha (0.85f));
                 const double t0 = (vis.getX() - r.getX()) / pps;
                 const double t1 = (vis.getRight() - r.getX()) / pps;
-                c->thumb->drawChannels (g, vis.withTrimmedTop (16).withTrimmedBottom (2), t0, t1, 1.0f);
+                c->thumb->drawChannels (g, vis.withTrimmedTop (16).withTrimmedBottom (2), t0, t1, jlimit (0.0f, 4.0f, c->gain.load()));
             }
 
             // fades: zona oscurecida + línea de la rampa + tirador para arrastrar
@@ -817,9 +846,30 @@ public:
             g.fillRect (r.getX() + fiW - 4, r.getY(), 8, 8);                    // tirador fade in
             g.fillRect (r.getRight() - foW - 4, r.getY(), 8, 8);                // tirador fade out
 
+            // perilla de volumen del clip
+            const auto kr = knobRect (*c);
+            if (! kr.isEmpty())
+            {
+                const bool changed = std::abs (c->gain.load() - 1.0f) > 0.001f;
+                const auto kf = kr.toFloat();
+                g.setColour (Colour (0xff1b1b1b));
+                g.fillEllipse (kf);
+                g.setColour (changed ? Colours::orange : Colours::white.withAlpha (0.85f));
+                g.drawEllipse (kf.reduced (0.5f), 1.2f);
+                const double norm = jlimit (0.0, 1.0, (clipDb (*c) + 60.0) / 72.0);
+                const float ang = (float) ((norm - 0.5) * 1.5 * MathConstants<double>::pi);     // -135° .. +135°
+                const auto ctr = kf.getCentre();
+                g.drawLine (ctr.x, ctr.y, ctr.x + std::sin (ang) * 5.0f, ctr.y - std::cos (ang) * 5.0f, 1.6f);
+            }
+
+            String label = c->name;
+            if (! kr.isEmpty() && std::abs (c->gain.load() - 1.0f) > 0.001f)
+                label << (c->gain.load() <= 0.0f ? String (" · -inf dB") : String (" · ") + String (clipDb (*c), 1) + " dB");
+
             g.setColour (Colours::white);
             g.setFont (12.0f);
-            g.drawText (c->name, r.getX() + 14, r.getY() + 1, jmax (10, r.getWidth() - 28), 14, Justification::left, true);
+            const int textX = r.getX() + (kr.isEmpty() ? 14 : 14 + knobD + 4);
+            g.drawText (label, textX, r.getY() + 1, jmax (10, r.getRight() - textX - 14), 14, Justification::left, true);
             g.setColour (Colours::black.withAlpha (0.6f));
             g.drawRect (r);
         }
@@ -834,6 +884,7 @@ public:
     {
         MouseCursor::StandardCursorType cur = MouseCursor::NormalCursor;
         if (onGrip (e) || lanes.onGrip (e, baseH())) { setMouseCursor (MouseCursor::UpDownResizeCursor); return; }
+        if (e.x >= ui::headerW && e.y < baseH() && knobAt (e) != nullptr) { setMouseCursor (MouseCursor::UpDownResizeCursor); return; }
         if (e.x >= ui::headerW && e.y < baseH())
         {
             if (owner.getTool() == ui::toolHand)     cur = MouseCursor::DraggingHandCursor;
@@ -871,6 +922,17 @@ public:
         }
 
         auto* c = clipAt (e.x);
+
+        // perilla de volumen del clip: arrastrar arriba / abajo
+        if (! e.mods.isPopupMenu())
+            if (auto* kc = knobAt (e))
+            {
+                eng.undoBegin();                       // Ctrl+Z deshace el cambio de volumen
+                gainClip = kc;
+                gainStartDb = clipDb (*kc);
+                owner.setSelected (&track, kc);
+                return;
+            }
 
         // tiradores de fade (esquinas superiores del clip): arrastra para dar duración al fade in / out
         fadeClip = nullptr;
@@ -989,6 +1051,13 @@ public:
             owner.trackDragMove (track, e.getScreenY());
             return;
         }
+        if (gainClip != nullptr)
+        {
+            const double db = jlimit (-60.0, 12.0, gainStartDb - e.getDistanceFromDragStartY() * 0.25);
+            gainClip->gain = db <= -59.9 ? 0.0f : Decibels::decibelsToGain ((float) db, -60.0f);
+            repaint();
+            return;
+        }
         if (resizing)
         {
             const int nh = jlimit (minH, maxH, resizeStartH + e.getDistanceFromDragStartY());
@@ -1056,6 +1125,13 @@ public:
     void mouseDoubleClick (const MouseEvent& e) override
     {
         if (onGrip (e)) { track.uiHeight = 96; resized(); owner.clipsChanged(); }
+        else if (auto* kc = knobAt (e))
+        {
+            eng.undoBegin();
+            kc->gain = 1.0f;
+            eng.undoEnd();
+            repaint();
+        }
         else lanes.resetGrip (e, baseH());
     }
 
@@ -1070,6 +1146,7 @@ public:
             repaint();
             return;
         }
+        if (gainClip != nullptr) { gainClip = nullptr; eng.undoEnd(); repaint(); return; }
         if (resizing) { resizing = false; return; }
         if (rightDown)
         {

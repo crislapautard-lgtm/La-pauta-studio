@@ -20,6 +20,7 @@ struct Clip
     std::atomic<int64> srcOffset { 0 };       // muestra del archivo original donde empieza este clip (recorte/división)
     std::atomic<int> fadeInSamples { 0 };     // duración del fade in (0 = sin fade)
     std::atomic<int> fadeOutSamples { 0 };    // duración del fade out (0 = sin fade)
+    std::atomic<float> gain { 1.0f };         // volumen del clip (perilla del clip), 1.0 = 0 dB
     std::unique_ptr<AudioThumbnail> thumb;
 };
 
@@ -141,7 +142,7 @@ struct Track
 // Engine: dispositivo de audio (WASAPI / DirectSound / ASIO), transporte,
 // mezcla, grabación, plugins y proyecto.
 // ---------------------------------------------------------------------------
-class Engine : public AudioIODeviceCallback
+class Engine : public AudioIODeviceCallback, private ChangeListener
 {
 public:
     Engine() : thumbCache (32), writerThread ("La Pauta Writer")
@@ -153,6 +154,8 @@ public:
 
     ~Engine() override
     {
+        deviceManager.removeChangeListener (this);
+        saveAudioSettings();
         deviceManager.removeAudioCallback (this);
         writerThread.stopThread (2000);
     }
@@ -160,10 +163,32 @@ public:
     // Devuelve "" si todo bien, o el error del dispositivo.
     String start()
     {
-        auto err = deviceManager.initialiseWithDefaultDevices (8, 2);
+        // la configuración de audio (driver, tarjeta, canales, frecuencia y buffer) se recuerda entre sesiones
+        std::unique_ptr<XmlElement> saved;
+        if (audioSettingsFile().existsAsFile())
+            saved = parseXML (audioSettingsFile());
+
+        auto err = deviceManager.initialise (8, 2, saved.get(), true);
         deviceManager.addAudioCallback (this);
+        deviceManager.addChangeListener (this);
         return err;
     }
+
+    static File audioSettingsFile()
+    {
+        return File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("LaPautaStudio").getChildFile ("audio.xml");
+    }
+
+    void saveAudioSettings()
+    {
+        if (auto xml = deviceManager.createStateXml())
+        {
+            audioSettingsFile().getParentDirectory().createDirectory();
+            xml->writeTo (audioSettingsFile());
+        }
+    }
+
+    void changeListenerCallback (ChangeBroadcaster*) override { saveAudioSettings(); }
 
     // ------------------------------ Pistas ---------------------------------
     Track* addTrack (const String& name, bool bus = false)
@@ -456,6 +481,7 @@ public:
         const int newLen = (int) (f1 - f0);
         nc->fadeInSamples  = f0 == off ? jmin (c->fadeInSamples.load(), newLen) : 0;
         nc->fadeOutSamples = f1 == off + total ? jmin (c->fadeOutSamples.load(), newLen) : 0;
+        nc->gain = c->gain.load();
         Clip* result = nc.get();
 
         std::unique_ptr<Clip> dead;
@@ -479,7 +505,7 @@ public:
     // destruyen: esperan en el "cementerio" mientras haya un paso de deshacer que los necesite.
     // No cubre: fader/pan/mute/solo, añadir o quitar pistas ni plugins (quitar una pista o un plugin borra el historial).
     // Todo esto corre solo en el hilo de la interfaz.
-    struct ClipState  { Clip* clip; int64 start; int fadeIn; int fadeOut; };
+    struct ClipState  { Clip* clip; int64 start; int fadeIn; int fadeOut; float gain; };
     struct EnvState   { Envelope* env; std::vector<EnvPoint> points; bool active; bool visible; };
     struct TrackState { Track* track; std::vector<ClipState> clips; std::vector<EnvState> envs; };   // track == nullptr = Master
     using Snapshot = std::vector<TrackState>;
@@ -556,7 +582,7 @@ private:
             TrackState ts;
             ts.track = t.get();
             for (auto& c : t->clips)
-                ts.clips.push_back ({ c.get(), c->startSample.load(), c->fadeInSamples.load(), c->fadeOutSamples.load() });
+                ts.clips.push_back ({ c.get(), c->startSample.load(), c->fadeInSamples.load(), c->fadeOutSamples.load(), c->gain.load() });
             captureEnvs (ts.envs, t->envs);
             s.push_back (std::move (ts));
         }
@@ -580,7 +606,7 @@ private:
             {
                 auto& p = x.clips[k];
                 auto& q = y.clips[k];
-                if (p.clip != q.clip || p.start != q.start || p.fadeIn != q.fadeIn || p.fadeOut != q.fadeOut) return false;
+                if (p.clip != q.clip || p.start != q.start || p.fadeIn != q.fadeIn || p.fadeOut != q.fadeOut || p.gain != q.gain) return false;
             }
             for (size_t k = 0; k < x.envs.size(); ++k)
             {
@@ -635,6 +661,7 @@ private:
                 c->startSample = cs.start;
                 c->fadeInSamples = cs.fadeIn;
                 c->fadeOutSamples = cs.fadeOut;
+                c->gain = cs.gain;
                 ts.track->clips.push_back (std::move (c));
             }
         }
@@ -941,6 +968,7 @@ public:
         nc->srcOffset = c->srcOffset.load();
         nc->fadeInSamples = c->fadeInSamples.load();
         nc->fadeOutSamples = c->fadeOutSamples.load();
+        nc->gain = c->gain.load();
         Clip* result = nc.get();
 
         const SpinLock::ScopedLockType sl (lock);
@@ -1009,6 +1037,8 @@ public:
         cb->srcOffset = c->srcOffset.load() + rel;
         ca->fadeInSamples = jmin (c->fadeInSamples.load(), (int) rel);                       // cada mitad conserva su borde
         cb->fadeOutSamples = jmin (c->fadeOutSamples.load(), total - (int) rel);
+        ca->gain = c->gain.load();                                                           // las dos mitades conservan el volumen
+        cb->gain = c->gain.load();
 
         std::unique_ptr<Clip> dead;
         {
@@ -1424,6 +1454,7 @@ public:
                 ce->setAttribute ("len", c->audio.getNumSamples());
                 ce->setAttribute ("fadein", c->fadeInSamples.load());
                 ce->setAttribute ("fadeout", c->fadeOutSamples.load());
+                ce->setAttribute ("gain", (double) c->gain.load());
             }
 
             for (auto& p : t->plugins)
@@ -1553,6 +1584,7 @@ public:
                     c->startSample = start;
                     c->fadeInSamples = jmax (0, ce->getIntAttribute ("fadein", 0));
                     c->fadeOutSamples = jmax (0, ce->getIntAttribute ("fadeout", 0));
+                    c->gain = (float) jlimit (0.0, 4.0, ce->getDoubleAttribute ("gain", 1.0));
                     addClip (*t, std::move (c));
                 }
                 else ++missing;
@@ -2170,10 +2202,13 @@ private:
         const int fi = jlimit (0, total, c.fadeInSamples.load());
         const int fo = jlimit (0, total, c.fadeOutSamples.load());
 
+        const float cg = c.gain.load();
+        if (cg <= 0.0f) return;
+
         if (fi == 0 && fo == 0)
         {
             for (int ch = 0; ch < 2; ++ch)
-                b.addFrom (ch, dst, c.audio, ch, src, len);
+                b.addFrom (ch, dst, c.audio, ch, src, len, cg);
             return;
         }
 
@@ -2185,9 +2220,9 @@ private:
             for (int i = 0; i < len; ++i)
             {
                 const int r = src + i;
-                float g = 1.0f;
-                if (fi > 0 && r < fi)          g = (float) r / (float) fi;
-                if (fo > 0 && r >= total - fo) g = jmin (g, (float) (total - r) / (float) fo);
+                float g = cg;
+                if (fi > 0 && r < fi)          g = cg * (float) r / (float) fi;
+                if (fo > 0 && r >= total - fo) g = jmin (g, cg * (float) (total - r) / (float) fo);
                 out[dst + i] += in[r] * g;
             }
         }
