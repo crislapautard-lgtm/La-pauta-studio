@@ -11,16 +11,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Con ASIO activado verás los drivers ASIO de tu tarjeta además de WASAPI y DirectSound.
 set(LAPAUTA_ASIO_SDK "" CACHE PATH "Carpeta del SDK de ASIO (opcional)")
 
-# Si pones el SDK dentro del repositorio, en la carpeta "asiosdk" (debe existir asiosdk/common/asio.h),
-# se detecta solo y ASIO queda activado; así también funciona en GitHub Actions.
-if(NOT LAPAUTA_ASIO_SDK AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/asiosdk/common/asio.h")
-    set(LAPAUTA_ASIO_SDK "${CMAKE_CURRENT_SOURCE_DIR}/asiosdk")
-endif()
-if(LAPAUTA_ASIO_SDK)
-    message(STATUS "ASIO activado: ${LAPAUTA_ASIO_SDK}")
-else()
-    message(STATUS "ASIO desactivado (falta la carpeta asiosdk, ver README)")
-endif()
 
 include(FetchContent)
 FetchContent_Declare(JUCE
@@ -29,9 +19,22 @@ FetchContent_Declare(JUCE
     GIT_SHALLOW ON)
 FetchContent_MakeAvailable(JUCE)
 
+# Busca tu icono: Assets/icon.png, Assets/icon.ico, o cualquier .png/.ico en Assets o en la raiz del repo.
+file(GLOB LAPAUTA_ICON_CANDIDATES
+    "${CMAKE_CURRENT_SOURCE_DIR}/Assets/icon.png" "${CMAKE_CURRENT_SOURCE_DIR}/Assets/icon.ico"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*.png" "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*.ico"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.png" "${CMAKE_CURRENT_SOURCE_DIR}/*.ico")
+list(GET LAPAUTA_ICON_CANDIDATES 0 LAPAUTA_ICON)
+if(NOT LAPAUTA_ICON)
+    message(FATAL_ERROR "No se encontro ningun icono (.png o .ico) en Assets ni en la raiz del repositorio.")
+endif()
+message(STATUS "Icono de La Pauta Studio: ${LAPAUTA_ICON}")
+
 juce_add_gui_app(LaPautaStudio
     PRODUCT_NAME "La Pauta Studio"
     COMPANY_NAME "La Pauta"
+    ICON_BIG "${LAPAUTA_ICON}"
+    ICON_SMALL "${LAPAUTA_ICON}"
     VERSION 0.1.0)
 
 juce_generate_juce_header(LaPautaStudio)
