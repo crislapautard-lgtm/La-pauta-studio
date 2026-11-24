@@ -233,7 +233,50 @@ struct RowOwner
 // ---------------------------------------------------------------------------
 class PluginWindow : public DocumentWindow
 {
+    // Contenedor: barra fina arriba (Fijar encima / Quitar plugin) + el editor del plugin debajo
+    struct Holder : public Component
+    {
+        static constexpr int barH = 26;
+        Holder (PluginWindow& w, Component* ed) : win (w), editorOwner (ed), editor (ed)
+        {
+            addAndMakeVisible (editor);
+            pinBtn.setClickingTogglesState (true);
+            pinBtn.setTooltip (T ("Fijar: la ventana de este plugin se queda siempre encima de todo"));
+            pinBtn.onClick = [this] { win.setAlwaysOnTop (pinBtn.getToggleState()); };
+            addAndMakeVisible (pinBtn);
+            delBtn.setTooltip (T ("Quitar este plugin de la pista cuando quieras"));
+            delBtn.onClick = [this] { if (win.onRemove) win.onRemove (&win); };
+            addAndMakeVisible (delBtn);
+            pinBtn.setColour (TextButton::buttonOnColourId, Colour (0xffc08a20));
+            delBtn.setColour (TextButton::buttonColourId, Colour (0xff7a2a2a));
+            setSize (jmax (260, editor->getWidth()), editor->getHeight() + barH);
+        }
+        void resized() override
+        {
+            auto r = getLocalBounds();
+            auto bar = r.removeFromTop (barH).reduced (3, 2);
+            pinBtn.setBounds (bar.removeFromLeft (120));
+            bar.removeFromLeft (6);
+            delBtn.setBounds (bar.removeFromLeft (130));
+            if (editor->getBounds() != r) editor->setBounds (r);
+        }
+        void childBoundsChanged (Component* c) override
+        {
+            if (c != editor) return;
+            const int w = jmax (260, editor->getWidth()), h = editor->getHeight() + barH;
+            if (getWidth() != w || getHeight() != h) setSize (w, h);
+        }
+        void paint (Graphics& g) override { g.fillAll (Theme::get().panel); }
+
+        PluginWindow& win;
+        std::unique_ptr<Component> editorOwner;   // el Holder es dueño del editor
+        Component* editor;
+        TextButton pinBtn { T ("Fijar encima") }, delBtn { T ("Quitar plugin") };
+    };
+
 public:
+    std::function<void (PluginWindow*)> onRemove;
+
     // 'ownerHandle' = ventana principal del DAW: así la ventana del plugin queda siempre por encima de ella
     // (no se esconde detrás al darle Play) y se minimiza con ella. 'spaceFn' = barra espaciadora = Play / Stop.
     PluginWindow (AudioPluginInstance& p, std::function<void (PluginWindow*)> closeCb,
@@ -247,7 +290,8 @@ public:
         if (ed == nullptr)
             ed = new GenericAudioProcessorEditor (p);
 
-        setContentOwned (ed, true);
+        auto* holder = new Holder (*this, ed);
+        setContentOwned (holder, true);
         setResizable (ed->isResizable(), false);
         centreWithSize (getWidth(), getHeight());
         if (ownerHandle != nullptr)
@@ -2141,7 +2185,7 @@ public:
         btnAuto.onClick = [this] { if (cbs.automation) cbs.automation(); };
         addAndMakeVisible (btnAuto);
 
-        hint.setText (T ("Arrastra un efecto para cambiar su orden (el de arriba procesa primero) · clic derecho: Reemplazar"),
+        hint.setText (T ("Arrastra un efecto para cambiar su orden (el de arriba procesa primero) · clic derecho: Reemplazar · Fijar: bloquea el efecto"),
                       dontSendNotification);
         hint.setFont (Font (FontOptions (11.0f)));
         hint.setColour (Label::textColourId, Colours::grey);
@@ -2189,6 +2233,12 @@ private:
             name.setInterceptsMouseClicks (false, false);
             addAndMakeVisible (name);
 
+            pin.setClickingTogglesState (false);
+            pin.setButtonText (T ("Fijar"));
+            pin.setTooltip (T ("Fijar este efecto: no se puede quitar, mover ni reemplazar hasta que lo sueltes"));
+            pin.onClick = [this] { owner.eng.setPinned (plugin, ! owner.eng.isPinned (plugin)); update(); };
+            addAndMakeVisible (pin);
+
             up.setButtonText (CharPointer_UTF8 ("\xE2\x96\xB2"));
             up.setTooltip (T ("Subir"));
             up.onClick = [this] { owner.eng.movePlugin (owner.track, index, index - 1); };
@@ -2208,14 +2258,19 @@ private:
             del.onClick = [this] { if (owner.cbs.remove) owner.cbs.remove (index); };
             addAndMakeVisible (del);
 
-            up.setEnabled (i > 0);
-            down.setEnabled (i + 1 < (int) owner.chainSize());
             update();
         }
 
         void update()
         {
             const bool off = owner.eng.isFxOff (owner.track, plugin);
+            const bool pinned = owner.eng.isPinned (plugin);
+            pin.setButtonText (pinned ? T ("Fijado") : T ("Fijar"));
+            pin.setColour (TextButton::buttonColourId, pinned ? Colour (0xffc08a20) : Colour (0xff3a3a3a));
+            pin.setColour (TextButton::textColourOffId, Colours::white);
+            up.setEnabled (! pinned && index > 0);
+            down.setEnabled (! pinned && index + 1 < (int) owner.chainSize());
+            del.setEnabled (! pinned);
             bypass.setButtonText (off ? "OFF" : "ON");
             bypass.setColour (TextButton::buttonColourId, off ? Colour (0xff7a2a2a) : Colour (0xff2e9d4f));
             bypass.setColour (TextButton::textColourOffId, Colours::white);
@@ -2229,6 +2284,7 @@ private:
             bypass.setBounds (r.removeFromLeft (44));
             r.removeFromLeft (4);
             del.setBounds (r.removeFromRight (26));
+            pin.setBounds (r.removeFromRight (52));
             open.setBounds (r.removeFromRight (52));
             down.setBounds (r.removeFromRight (26));
             up.setBounds (r.removeFromRight (26));
@@ -2250,7 +2306,7 @@ private:
 
         void mouseDrag (const MouseEvent& e) override
         {
-            if (e.mods.isPopupMenu() || e.getDistanceFromDragStart() < 4) return;
+            if (e.mods.isPopupMenu() || e.getDistanceFromDragStart() < 4 || owner.eng.isPinned (plugin)) return;
             if (! dragging) { dragging = true; repaint(); }
             owner.dragTo (e.getEventRelativeTo (&owner.body).y);
         }
@@ -2265,7 +2321,7 @@ private:
         int index;
         AudioPluginInstance* plugin;
         bool dragging = false;
-        TextButton bypass, up, down, open, del;
+        TextButton bypass, pin, up, down, open, del;
         Label name;
     };
 
@@ -2332,13 +2388,15 @@ private:
 
     void showRowMenu (int idx)
     {
+        const bool pinned = idx < (int) known.size() && eng.isPinned (known[(size_t) idx]);
         PopupMenu m;
-        m.addItem (1, T ("Reemplazar..."));
+        m.addItem (1, T ("Reemplazar..."), ! pinned);
         m.addItem (2, T ("Abrir"));
-        m.addItem (3, T ("Subir"), idx > 0);
-        m.addItem (4, T ("Bajar"), idx + 1 < (int) rows.size());
+        m.addItem (3, T ("Subir"), ! pinned && idx > 0);
+        m.addItem (4, T ("Bajar"), ! pinned && idx + 1 < (int) rows.size());
         m.addSeparator();
-        m.addItem (5, T ("Quitar"));
+        m.addItem (6, pinned ? T ("Soltar (quitar fijado)") : T ("Fijar"));
+        m.addItem (5, T ("Quitar"), ! pinned);
 
         SafePointer<FxChainPanel> sp (this);
         m.showMenuAsync (PopupMenu::Options(), [sp, idx] (int r)
@@ -2350,6 +2408,12 @@ private:
             else if (r == 3) self->eng.movePlugin (self->track, idx, idx - 1);
             else if (r == 4) self->eng.movePlugin (self->track, idx, idx + 1);
             else if (r == 5 && self->cbs.remove) self->cbs.remove (idx);
+            else if (r == 6)
+            {
+                auto* pl = self->known[(size_t) idx];
+                self->eng.setPinned (pl, ! self->eng.isPinned (pl));
+                self->refreshState();
+            }
         });
     }
 
@@ -4836,6 +4900,42 @@ private:
                 if (self->engine.playing) self->doStop(); else self->engine.play();
             }
         }));
+        windows.back()->onRemove = [sp] (PluginWindow* w)
+        {
+            MessageManager::callAsync ([sp, w]
+            {
+                auto* self = sp.getComponent();
+                if (self == nullptr) return;
+                for (auto& win : self->windows)
+                    if (win.get() == w) { self->removePluginAnywhere (win->plugin); return; }
+            });
+        };
+    }
+
+    // Quita un plugin (de una pista, de los Input FX o del Master) sea cual sea su lugar
+    void removePluginAnywhere (AudioPluginInstance* p)
+    {
+        if (p == nullptr) return;
+        if (engine.isPinned (p))
+        {
+            setStatus (T ("Ese plugin está fijado en la lista de FX: suéltalo primero"));
+            return;
+        }
+        for (auto& t : engine.tracks)
+        {
+            for (size_t i = 0; i < t->plugins.size(); ++i)
+                if (t->plugins[i].get() == p) { removeFromChain (t.get(), (int) i); return; }
+            for (size_t i = 0; i < t->inputPlugins.size(); ++i)
+                if (t->inputPlugins[i].get() == p)
+                {
+                    closeWindowFor (p);
+                    engine.removeInputPlugin (*t, (int) i);
+                    repaintRows();
+                    return;
+                }
+        }
+        for (size_t i = 0; i < engine.masterPlugins.size(); ++i)
+            if (engine.masterPlugins[i].get() == p) { removeFromChain (nullptr, (int) i); return; }
     }
 
     void closeWindow (PluginWindow* w)
