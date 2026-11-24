@@ -11,6 +11,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Con ASIO activado verás los drivers ASIO de tu tarjeta además de WASAPI y DirectSound.
 set(LAPAUTA_ASIO_SDK "" CACHE PATH "Carpeta del SDK de ASIO (opcional)")
 
+# Si pones el SDK dentro del repositorio, en la carpeta "asiosdk" (debe existir asiosdk/common/asio.h),
+# se detecta solo y ASIO queda activado; así también funciona en GitHub Actions.
+if(NOT LAPAUTA_ASIO_SDK AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/asiosdk/common/asio.h")
+    set(LAPAUTA_ASIO_SDK "${CMAKE_CURRENT_SOURCE_DIR}/asiosdk")
+endif()
+if(LAPAUTA_ASIO_SDK)
+    message(STATUS "ASIO activado: ${LAPAUTA_ASIO_SDK}")
+else()
+    message(STATUS "ASIO desactivado (falta la carpeta asiosdk, ver README)")
+endif()
+
 include(FetchContent)
 FetchContent_Declare(JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
@@ -21,8 +32,7 @@ FetchContent_MakeAvailable(JUCE)
 juce_add_gui_app(LaPautaStudio
     PRODUCT_NAME "La Pauta Studio"
     COMPANY_NAME "La Pauta"
-    VERSION 0.1.0
-    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Assets/LaPautaStudio.png")
+    VERSION 0.1.0)
 
 juce_generate_juce_header(LaPautaStudio)
 
