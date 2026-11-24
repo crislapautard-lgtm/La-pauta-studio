@@ -4443,10 +4443,38 @@ private:
     // --------------------------- Audio -------------------------------------
     void showAudioSettings()
     {
-        auto* sel = new AudioDeviceSelectorComponent (engine.deviceManager, 0, 8, 0, 2, false, false, false, false);
+        struct AudioPanel : public Component
+        {
+            explicit AudioPanel (Engine& e) : eng (e), sel (e.deviceManager, 0, 8, 0, 2, false, false, false, false)
+            {
+                addAndMakeVisible (sel);
+                rescan.setButtonText (T ("Buscar tarjetas de nuevo"));
+                rescan.onClick = [this] { eng.rescanAudioDevices(); };
+                addAndMakeVisible (rescan);
+                reset.setButtonText (T ("Restablecer audio"));
+                reset.setTooltip (T ("Borra la configuración guardada y usa la tarjeta predeterminada de Windows"));
+                reset.onClick = [this] { eng.resetAudioSettings(); };
+                addAndMakeVisible (reset);
+                setSize (520, 500);
+            }
+
+            void resized() override
+            {
+                auto r = getLocalBounds();
+                auto bar = r.removeFromBottom (36).reduced (8, 4);
+                rescan.setBounds (bar.removeFromLeft (200));
+                bar.removeFromLeft (8);
+                reset.setBounds (bar.removeFromLeft (160));
+                sel.setBounds (r);
+            }
+
+            Engine& eng;
+            AudioDeviceSelectorComponent sel;
+            TextButton rescan, reset;
+        };
+
         DialogWindow::LaunchOptions o;
-        o.content.setOwned (sel);
-        o.content->setSize (520, 460);
+        o.content.setOwned (new AudioPanel (engine));
         o.dialogTitle = T ("Configuración de audio (driver y tarjeta)");
         o.dialogBackgroundColour = Colour (0xff202020);
         o.componentToCentreAround = this;

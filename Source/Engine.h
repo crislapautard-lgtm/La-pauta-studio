@@ -169,6 +169,13 @@ public:
             saved = parseXML (audioSettingsFile());
 
         auto err = deviceManager.initialise (8, 2, saved.get(), true);
+        if (saved != nullptr && (err.isNotEmpty() || deviceManager.getCurrentAudioDevice() == nullptr))
+        {
+            // la configuración guardada ya no sirve (tarjeta desconectada, driver distinto...): se descarta y se usan los valores por defecto
+            audioSettingsFile().deleteFile();
+            deviceManager.closeAudioDevice();
+            err = deviceManager.initialise (8, 2, nullptr, true);
+        }
         deviceManager.addAudioCallback (this);
         deviceManager.addChangeListener (this);
         return err;
@@ -179,8 +186,24 @@ public:
         return File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("LaPautaStudio").getChildFile ("audio.xml");
     }
 
+    // Vuelve a pedir al sistema la lista de tarjetas y drivers (por si conectaste la tarjeta con el DAW abierto)
+    void rescanAudioDevices()
+    {
+        if (auto* t = deviceManager.getCurrentDeviceTypeObject()) t->scanForDevices();
+        deviceManager.sendChangeMessage();
+    }
+
+    // Borra la configuración guardada y vuelve a los dispositivos por defecto del sistema
+    void resetAudioSettings()
+    {
+        audioSettingsFile().deleteFile();
+        deviceManager.closeAudioDevice();
+        deviceManager.initialise (8, 2, nullptr, true);
+    }
+
     void saveAudioSettings()
     {
+        if (deviceManager.getCurrentAudioDevice() == nullptr) return;       // sin dispositivo no se guarda nada
         if (auto xml = deviceManager.createStateXml())
         {
             audioSettingsFile().getParentDirectory().createDirectory();
