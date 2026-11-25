@@ -1099,6 +1099,7 @@ public:
             return;
         }
         dragClip = nullptr;
+        altClip = nullptr;
         trimClip = nullptr;
         rightDown = false;
         emptyDown = false;
@@ -1162,6 +1163,14 @@ public:
 
         const int tool = owner.getTool();
         const bool ctrlDown = e.mods.isCtrlDown() || e.mods.isCommandDown();
+
+        // Alt + clic izquierdo sobre un audio: se arrastra FUERA (a un afinador, otro programa) o sobre otro audio para sustituirlo
+        if (c != nullptr && e.mods.isAltDown() && ! ctrlDown)
+        {
+            owner.setSelected (&track, c);
+            altClip = c;
+            return;
+        }
 
         // Varios clips seleccionados con el cuadro: arrastrar uno de ellos mueve todos juntos
         if (c != nullptr && tool != ui::toolCut && ! ctrlDown && owner.isClipSelected (c) && owner.selectionCount() > 1)
@@ -1234,6 +1243,17 @@ public:
 
     void mouseDrag (const MouseEvent& e) override
     {
+        if (altClip != nullptr)
+        {
+            if (e.getDistanceFromDragStart() < 6) return;
+            auto* ac = altClip;
+            altClip = nullptr;
+            if (! ownsClip (ac)) return;
+            const File f = eng.writeClipForExternal (*ac);
+            if (f != File())
+                DragAndDropContainer::performExternalDragDropOfFiles (StringArray (f.getFullPathName()), false, this);
+            return;
+        }
         if (headerDrag)
         {
             if (! headerMoved && e.getDistanceFromDragStart() < 5) return;
@@ -1336,6 +1356,7 @@ public:
             repaint();
             return;
         }
+        if (altClip != nullptr) { altClip = nullptr; return; }
         if (gainClip != nullptr) { gainClip = nullptr; eng.undoEnd(); repaint(); return; }
         if (resizing) { resizing = false; return; }
         if (rightDown)
@@ -1567,6 +1588,7 @@ private:
     static constexpr double fadeSecs[6] = { 0.0, 0.25, 0.5, 1.0, 2.0, 4.0 };
 
     Clip* dragClip = nullptr;
+    Clip* altClip = nullptr;      // Alt + clic izquierdo: arrastre hacia afuera / sustituir
     bool emptyDown = false, emptyMoved = false, groupDrag = false;   // cuadro de selección / mover grupo
     int emptyX = 0;
     int64 groupAnchor = 0;
@@ -4839,9 +4861,43 @@ private:
     void filesDropped (const StringArray& files, int x, int y) override
     {
         dropOverlay.setVisible (false);
-        importDroppedFiles (files);
-
         Track* target = trackAtScreenY (localPointToGlobal (Point<int> (x, y)).getY());
+
+        // Un audio soltado ENCIMA de otro lo sustituye (ej. la voz afinada que sale del afinador reemplaza a la cruda)
+        StringArray toImport = files;
+        if (target != nullptr)
+        {
+            const auto pv = viewport.getLocalPoint (this, Point<int> (x, y));
+            const double secs = (double) (pv.x + viewport.getViewPositionX() - ui::headerW) / pxPerSec;
+            const int64 smp = (int64) (secs * engine.sampleRate);
+            for (int i = 0; i < toImport.size(); ++i)
+            {
+                if (! isAudioFile (toImport[i])) continue;
+                Clip* hit = nullptr;
+                for (auto& cl : target->clips)
+                    if (smp >= cl->startSample.load() && smp < cl->startSample.load() + cl->audio.getNumSamples()) hit = cl.get();
+                if (hit == nullptr) break;
+
+                envWindow.reset();
+                if (hit->fx != nullptr)
+                {
+                    if (fxTarget == hit->fx.get()) { fxWindow.reset(); fxTarget = nullptr; }
+                    for (auto& pl : hit->fx->plugins) closeWindowFor (pl.get());
+                }
+                if (auto* nc = engine.replaceClipWithFile (*target, hit, File (toImport[i])))
+                {
+                    setSelected (target, nc);
+                    clipsChanged();
+                    setStatus (T ("Audio sustituido (Ctrl+Z para volver al anterior)"));
+                    toImport.remove (i);
+                }
+                else
+                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Sustituir", T ("No se pudo cargar ese audio."));
+                break;
+            }
+        }
+        importDroppedFiles (toImport);
+
         if (target == nullptr && selTrack != nullptr && engine.hasTrack (selTrack) && ! selTrack->isBus.load()) target = selTrack;
 
         for (auto& p : files)

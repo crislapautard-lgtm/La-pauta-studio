@@ -1088,6 +1088,52 @@ public:
         return true;
     }
 
+    // Escribe el audio crudo de un clip como WAV (para arrastrarlo a un afinador u otro programa). Devuelve el archivo o File() si falla.
+    File writeClipForExternal (const Clip& c)
+    {
+        auto dir = File::getSpecialLocation (File::userDocumentsDirectory)
+                       .getChildFile ("La Pauta Studio").getChildFile ("Para afinar");
+        dir.createDirectory();
+        const File f = dir.getNonexistentChildFile (File::createLegalFileName (c.name), ".wav");
+        std::unique_ptr<FileOutputStream> fos (f.createOutputStream());
+        if (fos == nullptr) return {};
+        WavAudioFormat wav;
+        std::unique_ptr<AudioFormatWriter> w (wav.createWriterFor (fos.get(), sampleRate, 2, 24, {}, 0));
+        if (w == nullptr) return {};
+        fos.release();
+        w->writeFromAudioSampleBuffer (c.audio, 0, c.audio.getNumSamples());
+        return f;
+    }
+
+    // Reemplaza un clip por el audio de un archivo (mismo lugar, mismo volumen). Un solo paso de Ctrl+Z lo devuelve.
+    Clip* replaceClipWithFile (Track& t, Clip* old, const File& f)
+    {
+        auto nc = loadClip (f);
+        if (nc == nullptr) return nullptr;
+        nc->startSample = old->startSample.load();
+        nc->gain = old->gain.load();
+        const int len = nc->audio.getNumSamples();
+        nc->fadeInSamples = jmin (len, old->fadeInSamples.load());
+        nc->fadeOutSamples = jmin (len, old->fadeOutSamples.load());
+        Clip* result = nc.get();
+
+        undoBegin();
+        std::unique_ptr<Clip> dead;
+        {
+            const SpinLock::ScopedLockType sl (lock);
+            for (size_t i = 0; i < t.clips.size(); ++i)
+                if (t.clips[i].get() == old)
+                {
+                    dead = std::move (t.clips[i]);
+                    t.clips.erase (t.clips.begin() + (long) i);
+                    break;
+                }
+            t.clips.push_back (std::move (nc));
+        }
+        retire (std::move (dead));
+        return result;
+    }
+
     // Guarda 'audio' como WAV y cambia el clip viejo por uno nuevo en el mismo lugar (con sus fades y volumen).
     // Un solo paso de Ctrl+Z devuelve el original. Debe llamarse desde el hilo principal.
     Clip* replaceClipWithAudio (Track& t, Clip* old, AudioBuffer<float>&& audio, String& err)
