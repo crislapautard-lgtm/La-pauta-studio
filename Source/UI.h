@@ -2166,6 +2166,7 @@ struct FxCallbacks
     std::function<void (int)> replace;
     std::function<void (int)> remove;
     std::function<void()> automation;
+    std::function<void()> bake;        // solo FX de un audio: fijar los efectos dentro del audio
 };
 
 class FxBody : public Component
@@ -2200,7 +2201,15 @@ public:
         btnAuto.setButtonText (T ("Automatización..."));
         btnAuto.onClick = [this] { if (cbs.automation) cbs.automation(); };
         addAndMakeVisible (btnAuto);
-        btnAuto.setVisible (cbs.automation != nullptr);      // los FX propios de un audio no tienen automatización
+        btnAuto.setVisible (cbs.automation != nullptr);
+
+        btnBake.setButtonText (T ("Fijar al audio"));
+        btnBake.setTooltip (T ("Aplica todos los efectos de esta ventana al audio y los deja dentro de él"));
+        btnBake.setColour (TextButton::buttonColourId, Colour (0xffc08a20));
+        btnBake.setColour (TextButton::textColourOffId, Colours::white);
+        btnBake.onClick = [this] { if (cbs.bake) cbs.bake(); };
+        addAndMakeVisible (btnBake);
+        btnBake.setVisible (cbs.bake != nullptr);      // los FX propios de un audio no tienen automatización
 
         hint.setText (T ("Arrastra un efecto para cambiar su orden (el de arriba procesa primero) · clic derecho: Reemplazar · Fijar: bloquea el efecto"),
                       dontSendNotification);
@@ -2228,6 +2237,7 @@ public:
         btnAdd.setBounds (top.removeFromLeft (100));
         top.removeFromLeft (6);
         btnAuto.setBounds (top.removeFromLeft (130));
+        btnBake.setBounds (btnAuto.getBounds().withWidth (130));
         r.removeFromTop (4);
         hint.setBounds (r.removeFromBottom (30));
         vp.setBounds (r);
@@ -2438,7 +2448,7 @@ private:
     Track* track;
     FxCallbacks cbs;
     std::vector<AudioPluginInstance*> known;
-    TextButton btnAll, btnAdd, btnAuto;
+    TextButton btnAll, btnAdd, btnAuto, btnBake;
     Label hint;
     std::vector<std::unique_ptr<Row>> rows;      // antes que 'body' y 'vp'
     FxBody body;
@@ -3913,6 +3923,16 @@ public:
         const bool clipChain = engine.isClipChain (t);
         if (! clipChain)
             cb.automation = [sp, t] { if (auto* s = sp.getComponent()) s->showEnvelopePanel (t); };
+
+        if (clipChain)
+            cb.bake = [sp, t]
+            {
+                auto* s = sp.getComponent();
+                if (s == nullptr) return;
+                for (auto& tr : s->engine.tracks)
+                    for (auto& c : tr->clips)
+                        if (c->fx.get() == t) { s->applyFxToClip (*tr, *c); return; }
+            };
 
         const String title = clipChain ? T ("FX del audio - ") + t->name
                                        : (t != nullptr ? T ("FX - ") + t->name : T ("FX - Master"));
