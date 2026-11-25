@@ -221,6 +221,7 @@ struct RowOwner
     virtual void marqueeDrag (Point<int> screenPos) = 0;
     virtual void marqueeEnd() = 0;
     virtual void setLoopFromClip (Clip&) = 0;
+    virtual void showClipFx (Track&, Clip&) = 0;        // ventana de FX propios del audio (clip)
     virtual void applyFxToClip (Track&, Clip&) = 0;     // pasa el clip por los efectos de su pista y lo reemplaza
     virtual void toggleLoop() = 0;
 
@@ -1419,6 +1420,9 @@ public:
                 eng.moveClip (track, *dst, moved);
                 owner.setSelected (dst, moved);
             }
+            // soltado encima de otro audio: lo reemplaza (el de abajo se quita; Ctrl+Z lo devuelve)
+            if (ownsClipOn (toOtherTrack ? *dst : track, moved))
+                eng.removeClipsUnder (toOtherTrack ? *dst : track, moved);
             eng.undoEnd();               // un clic sin mover no deja paso de deshacer
             owner.clipsChanged();
         }
@@ -1479,7 +1483,9 @@ private:
             m.addItem (1, T ("Dividir en el cursor"));
             m.addItem (2, T ("Eliminar clip (Supr)"));
             m.addItem (3, T ("Bucle sobre este clip"));
-            m.addItem (4, T ("Aplicar efectos y reemplazar (ej. afinación)"), ! track.plugins.empty());
+            m.addItem (5, T ("FX de este audio... (se quedan con el audio)"));
+            m.addItem (4, T ("Fijar efectos en el audio (aplicar y reemplazar)"),
+                       (c->fx != nullptr && ! c->fx->plugins.empty()) || ! track.plugins.empty());
             m.addSeparator();
 
             PopupMenu fo, fi;
@@ -1508,6 +1514,7 @@ private:
 
             if (r == 3) { self->owner.setLoopFromClip (*c); return; }
             if (r == 4) { self->owner.applyFxToClip (self->track, *c); return; }
+            if (r == 5) { self->owner.showClipFx (self->track, *c); return; }
 
             if ((r >= 30 && r < 36) || (r >= 40 && r < 46))
             {
@@ -1524,6 +1531,12 @@ private:
             self->owner.setSelected (nullptr, nullptr);
             self->owner.clipsChanged();
         });
+    }
+
+    static bool ownsClipOn (Track& t, Clip* c)
+    {
+        for (auto& x : t.clips) if (x.get() == c) return true;
+        return false;
     }
 
     Clip* clipAt (int x) const
@@ -2187,6 +2200,7 @@ public:
         btnAuto.setButtonText (T ("Automatización..."));
         btnAuto.onClick = [this] { if (cbs.automation) cbs.automation(); };
         addAndMakeVisible (btnAuto);
+        btnAuto.setVisible (cbs.automation != nullptr);      // los FX propios de un audio no tienen automatización
 
         hint.setText (T ("Arrastra un efecto para cambiar su orden (el de arriba procesa primero) · clic derecho: Reemplazar · Fijar: bloquea el efecto"),
                       dontSendNotification);
@@ -3544,21 +3558,29 @@ public:
     void marqueeEnd() override { marquee.setRect ({}); }      // la selección se queda marcada en naranja
 
     // Pasa el clip por los efectos de la pista (ej. tu afinador) y reemplaza el audio sin afinar por el resultado.
+    void showClipFx (Track&, Clip& c) override
+    {
+        openFxChain (&engine.clipFx (c));
+    }
+
     void applyFxToClip (Track& t, Clip& c) override
     {
         if (busyApply) return;
+        // Si el audio tiene sus propios efectos se usan esos; si no, los de la pista.
+        const bool ownChain = c.fx != nullptr && ! c.fx->plugins.empty();
+        Track* chain = ownChain ? c.fx.get() : &t;
         busyApply = true;
         setStatus (T ("Aplicando efectos al clip..."));
         SafePointer<MainComponent> sp (this);
         Track* tp = &t;
         Clip* cp = &c;
-        Thread::launch ([sp, tp, cp]
+        Thread::launch ([sp, tp, cp, chain]
         {
             AudioBuffer<float> out;
             String err;
             bool ok = false;
             if (auto* s = sp.getComponent())
-                ok = s->engine.renderClipThroughFx (*tp, cp, out, [] (double) { return true; }, err);
+                ok = s->engine.renderClipThroughFx (*chain, cp, out, [] (double) { return true; }, err);
 
             auto shared = std::make_shared<AudioBuffer<float>> (std::move (out));
             MessageManager::callAsync ([sp, tp, cp, ok, err, shared]
@@ -3569,6 +3591,12 @@ public:
                 String e2 = err;
                 if (ok && self->engine.hasTrack (tp))
                 {
+                    // el clip viejo (con sus plugins) se retira: se cierran antes sus ventanas
+                    if (cp->fx != nullptr)
+                    {
+                        if (self->fxTarget == cp->fx.get()) { self->fxWindow.reset(); self->fxTarget = nullptr; }
+                        for (auto& pl : cp->fx->plugins) self->closeWindowFor (pl.get());
+                    }
                     if (self->engine.replaceClipWithAudio (*tp, cp, std::move (*shared), e2) != nullptr)
                     {
                         self->setSelected (nullptr, nullptr);
@@ -3882,9 +3910,12 @@ public:
         {
             MessageManager::callAsync ([sp, t, idx] { if (auto* s = sp.getComponent()) s->removeFromChain (t, idx); });
         };
-        cb.automation = [sp, t] { if (auto* s = sp.getComponent()) s->showEnvelopePanel (t); };
+        const bool clipChain = engine.isClipChain (t);
+        if (! clipChain)
+            cb.automation = [sp, t] { if (auto* s = sp.getComponent()) s->showEnvelopePanel (t); };
 
-        const String title = t != nullptr ? T ("FX - ") + t->name : T ("FX - Master");
+        const String title = clipChain ? T ("FX del audio - ") + t->name
+                                       : (t != nullptr ? T ("FX - ") + t->name : T ("FX - Master"));
         fxWindow = std::make_unique<EnvelopeWindow> (title, new FxChainPanel (engine, t, cb), [sp]
         {
             MessageManager::callAsync ([sp] { if (auto* s = sp.getComponent()) s->fxWindow.reset(); });

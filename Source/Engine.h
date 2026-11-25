@@ -12,8 +12,11 @@ using namespace juce;
 // ---------------------------------------------------------------------------
 // Clip: un trozo de audio en la línea de tiempo (estéreo, ya remuestreado).
 // ---------------------------------------------------------------------------
+struct Track;
 struct Clip
 {
+    ~Clip();
+    std::unique_ptr<Track> fx;                 // efectos del propio clip (opcional); es una 'pista' interna que solo guarda plugins
     String name;
     File file;
     AudioBuffer<float> audio;                 // siempre 2 canales
@@ -139,6 +142,8 @@ struct Track
     File recFile;
 };
 
+inline Clip::~Clip() = default;
+
 // ---------------------------------------------------------------------------
 // Engine: dispositivo de audio (WASAPI / DirectSound / ASIO), transporte,
 // mezcla, grabación, plugins y proyecto.
@@ -151,6 +156,7 @@ public:
         formats.registerBasicFormats();   // WAV, AIFF, FLAC, OGG, MP3 (lectura) ...
         writerThread.startThread();
         mix.setSize (8, maxBlock);   // 2 canales de salida + canales extra que algunos plugins piden
+        clipFxBuf.setSize (8, maxBlock);
     }
 
     ~Engine() override
@@ -210,8 +216,88 @@ public:
 
     bool hasTrack (Track* t) const
     {
-        for (auto& x : tracks) if (x.get() == t) return true;
+        for (auto& x : tracks)
+        {
+            if (x.get() == t) return true;
+            for (auto& c : x->clips)
+                if (c->fx != nullptr && c->fx.get() == t) return true;    // la cadena de FX de un clip también cuenta
+        }
         return false;
+    }
+
+    // ¿Es la cadena interna de FX de un clip (y no una pista de verdad)?
+    bool isClipChain (Track* t) const
+    {
+        if (t == nullptr) return false;
+        for (auto& x : tracks)
+            for (auto& c : x->clips)
+                if (c->fx != nullptr && c->fx.get() == t) return true;
+        return false;
+    }
+
+    // Cadena de efectos de un clip (se crea al primer uso). Solo desde el hilo principal.
+    Track& clipFx (Clip& c)
+    {
+        if (c.fx == nullptr)
+        {
+            auto h = std::make_unique<Track>();
+            h->name = c.name;
+            const SpinLock::ScopedLockType sl (lock);
+            c.fx = std::move (h);
+        }
+        return *c.fx;
+    }
+
+    // ¿existe todavía este plugin en alguna parte del proyecto?
+    bool pluginAlive (const AudioPluginInstance* p) const
+    {
+        for (auto& x : masterPlugins) if (x.get() == p) return true;
+        for (auto& t : tracks)
+        {
+            for (auto& x : t->plugins) if (x.get() == p) return true;
+            for (auto& x : t->inputPlugins) if (x.get() == p) return true;
+            for (auto& c : t->clips)
+                if (c->fx != nullptr)
+                    for (auto& x : c->fx->plugins) if (x.get() == p) return true;
+        }
+        return false;
+    }
+
+    // Quita el audio de un clip que queda debajo de otro (al soltar un audio encima para reemplazarlo)
+    void removeClipsUnder (Track& t, Clip* keep)
+    {
+        const int64 a = keep->startSample.load(), b = a + keep->audio.getNumSamples();
+        std::vector<Clip*> victims;
+        for (auto& c : t.clips)
+            if (c.get() != keep)
+            {
+                const int64 s = c->startSample.load(), en = s + c->audio.getNumSamples();
+                if (jmin (b, en) - jmax (a, s) > (en - s) / 2) victims.push_back (c.get());   // cubierto en más de la mitad
+            }
+        for (auto* v : victims)
+        {
+            std::unique_ptr<Clip> dead;
+            {
+                const SpinLock::ScopedLockType sl (lock);
+                for (size_t i = 0; i < t.clips.size(); ++i)
+                    if (t.clips[i].get() == v) { dead = std::move (t.clips[i]); t.clips.erase (t.clips.begin() + (long) i); break; }
+            }
+            retire (std::move (dead));
+        }
+    }
+
+    // Clips de la pista que quedarían cubiertos (más de la mitad) por 'c'
+    int countCoveredBy (Track& t, Clip* c) const
+    {
+        const int64 a = c->startSample.load(), b = a + c->audio.getNumSamples();
+        int n = 0;
+        for (auto& o : t.clips)
+            if (o.get() != c)
+            {
+                const int64 s = o->startSample.load(), en = s + o->audio.getNumSamples();
+                if (jmin (b, en) - jmax (a, s) > (en - s) / 2) ++n;
+            }
+        return n;
     }
 
     int indexOf (Track* t) const
@@ -1546,6 +1632,17 @@ public:
                 ce->setAttribute ("fadein", c->fadeInSamples.load());
                 ce->setAttribute ("fadeout", c->fadeOutSamples.load());
                 ce->setAttribute ("gain", (double) c->gain.load());
+                if (c->fx != nullptr)
+                    for (auto& p : c->fx->plugins)
+                    {
+                        auto* fx = ce->createNewChildElement ("FX");
+                        fx->setAttribute ("bypass", isOff (c->fx->fxOff, p.get()));
+                        if (auto desc = p->getPluginDescription().createXml())
+                            fx->addChildElement (desc.release());
+                        MemoryBlock mb;
+                        p->getStateInformation (mb);
+                        fx->setAttribute ("state", mb.toBase64Encoding());
+                    }
             }
 
             for (auto& p : t->plugins)
@@ -1714,7 +1811,26 @@ public:
                     c->fadeInSamples = jmax (0, ce->getIntAttribute ("fadein", 0));
                     c->fadeOutSamples = jmax (0, ce->getIntAttribute ("fadeout", 0));
                     c->gain = (float) jlimit (0.0, 4.0, ce->getDoubleAttribute ("gain", 1.0));
+                    Clip* rawClip = c.get();
                     addClip (*t, std::move (c));
+                    for (auto* fx : ce->getChildWithTagNameIterator ("FX"))
+                    {
+                        PluginDescription d;
+                        auto* de = fx->getChildByName ("PLUGIN");
+                        if (de == nullptr || ! d.loadFromXml (*de)) { ++missing; continue; }
+                        String perr;
+                        if (auto inst = host.create (d, sampleRate, maxBlock, perr))
+                        {
+                            MemoryBlock mb;
+                            if (mb.fromBase64Encoding (fx->getStringAttribute ("state")))
+                                inst->setStateInformation (mb.getData(), (int) mb.getSize());
+                            auto* raw = inst.get();
+                            Track& holder = clipFx (*rawClip);
+                            addPlugin (holder, std::move (inst));
+                            if (fx->getBoolAttribute ("bypass", false)) setFxOff (&holder, raw, true);
+                        }
+                        else ++missing;
+                    }
                 }
                 else ++missing;
             }
@@ -1834,6 +1950,7 @@ public:
         blockSize = bs;
         maxBlock = jmax (bs, 2048);
         mix.setSize (8, maxBlock);
+        clipFxBuf.setSize (8, maxBlock);
         clickBuf.assign ((size_t) maxBlock, 0.0f);
 
         for (auto& p : masterPlugins)
@@ -1859,6 +1976,14 @@ public:
                 p->prepareToPlay (sr, maxBlock);
                 p->setPlayHead (this);       // los plugins (afinadores, etc.) leen play/posición/BPM del DAW
             }
+            for (auto& c : t->clips)
+                if (c->fx != nullptr)
+                    for (auto& p : c->fx->plugins)
+                    {
+                        p->setRateAndBufferSizeDetails (sr, maxBlock);
+                        p->prepareToPlay (sr, maxBlock);
+                        p->setPlayHead (this);
+                    }
         }
     }
 
@@ -2055,9 +2180,9 @@ public:
             if (isPlaying && ! bus)
                 for (auto& c : t->clips)
                 {
-                    mixClip (*c, b, pos, 0, len1);
+                    mixClipFx (*c, b, pos, 0, len1);
                     if (useLoop && len1 < n)
-                        mixClip (*c, b, lS, len1, n - len1);
+                        mixClipFx (*c, b, lS, len1, n - len1);
                 }
 
             // Entrada de la tarjeta -> Input FX -> grabación (y monitor). Solo se procesa si hace falta.
@@ -2301,6 +2426,7 @@ public:
     std::atomic<double> bpm { 120.0 };
     std::atomic<int64> selStart { 0 }, selEnd { 0 };  // selección de tiempo (selEnd <= selStart = no hay)
     std::atomic<bool> loopOn { false };
+    AudioBuffer<float> clipFxBuf;          // trabajo para los efectos de clip (hilo de audio)
     std::atomic<int64> blockPos { 0 };
     std::atomic<bool> blockPlaying { false }, blockRec { false };
     std::atomic<int64> loopStart { 0 }, loopEnd { 0 };
@@ -2350,7 +2476,34 @@ private:
 
     // Mezcla la parte del clip que cae entre 'pos' y 'pos + n' (posición en la línea de tiempo)
     // dentro del buffer 'b', empezando en la muestra 'dstOff' del buffer.
-    static void mixClip (Clip& c, AudioBuffer<float>& b, int64 pos, int dstOff, int n)
+    // Igual que mixClip, pero si el clip tiene efectos propios, el audio pasa primero por ellos
+    void mixClipFx (Clip& c, AudioBuffer<float>& b, int64 pos, int dstOff, int n)
+    {
+        Track* f = c.fx.get();
+        if (f == nullptr || f->plugins.empty() || clipFxBuf.getNumSamples() < n) { mixClip (c, b, pos, dstOff, n); return; }
+
+        const int64 cs = c.startSample.load();
+        const int64 ce = cs + c.audio.getNumSamples();
+        if (n <= 0 || pos + n <= cs || pos >= ce) return;
+        const int64 from = jmax (pos, cs), to = jmin (pos + n, ce);
+        const int src = (int) (from - cs), len = (int) (to - from);
+
+        clipFxBuf.clear (0, len);
+        for (int ch = 0; ch < 2; ++ch)
+            clipFxBuf.copyFrom (ch, 0, c.audio, ch, src, len);
+
+        const int64 savedPos = blockPos.load();
+        blockPos = from;
+        for (auto& p : f->plugins)
+            processPlugin (*p, clipFxBuf, len, isOff (f->fxOff, p.get()));
+        blockPos = savedPos;
+
+        mixClip (c, b, pos, dstOff, n, &clipFxBuf, src);
+    }
+
+    // 'ov' (opcional): audio ya procesado que sustituye al del clip; contiene 'len' muestras que empiezan en la muestra 'ovBase' del clip
+    static void mixClip (Clip& c, AudioBuffer<float>& b, int64 pos, int dstOff, int n,
+                         const AudioBuffer<float>* ov = nullptr, int ovBase = 0)
     {
         const int64 cs = c.startSample.load();
         const int64 ce = cs + c.audio.getNumSamples();
@@ -2369,14 +2522,14 @@ private:
         if (fi == 0 && fo == 0)
         {
             for (int ch = 0; ch < 2; ++ch)
-                b.addFrom (ch, dst, c.audio, ch, src, len, cg);
+                b.addFrom (ch, dst, ov != nullptr ? *ov : c.audio, ch, ov != nullptr ? src - ovBase : src, len, cg);
             return;
         }
 
         // con fades: ganancia lineal por muestra (sube al entrar, baja al salir)
         for (int ch = 0; ch < 2; ++ch)
         {
-            const float* in = c.audio.getReadPointer (ch);
+            const float* in = (ov != nullptr ? *ov : c.audio).getReadPointer (ch) - (ov != nullptr ? ovBase : 0);
             float* out = b.getWritePointer (ch);
             for (int i = 0; i < len; ++i)
             {
